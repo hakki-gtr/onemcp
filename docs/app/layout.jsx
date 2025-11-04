@@ -12,13 +12,13 @@ export const metadata = {
 
 const banner = (
 	<Banner storageKey="gentoro-onemcp-banner">
-		🚀 Gentoro OneMCP is now open source!
+		🚀 Gentoro OneMCP is open source!
 	</Banner>
 );
 const navbar = (
 	<Navbar
 		logo={<b>OneMCP</b>}
-		projectLink="https://github.com/gentoro-GT/onemcp"
+		projectLink="https://github.com/Gentoro-OneMCP/onemcp"
 	// ... Your additional navbar options
 	/>
 );
@@ -75,7 +75,7 @@ export default async function RootLayout({ children }) {
 					banner={banner}
 					navbar={navbar}
 					pageMap={await getPageMap()}
-					docsRepositoryBase="https://github.com/gentoro-GT/onemcp/tree/main/docs"
+				docsRepositoryBase="https://github.com/Gentoro-OneMCP/onemcp/tree/main/docs"
 					editLink="Edit this page on GitHub"
 					footer={footer}
 				// ... Your additional layout options
