@@ -65,8 +65,8 @@ banner() {
    ____            _                  
   / ___| ___ _ __ | |_ ___  _ __ ___  
  | |  _ / __| '_ \| __/ _ \| '__/ _ \  
- | |_| \__ \ | | | || (_) | | | (_) | 
-  \____|___/_| |_|\__\___/|_|  \___/  
+ | |_| \ __ \ | | | || (_) | | | (_) | 
+  \____|____/_| |_|\__\___/|_|  \___/  
    ___             __  __  ____ ____
   / _ \ _ __   ___|  \/  |/ ___|  _ \
  | | | | '_ \ / _ \ |\/| | |   | |_) |
@@ -199,7 +199,7 @@ clone_repository() {
 build_java_app() {
     log_info "Building Java application..."
 
-    cd "$INSTALL_DIR/src/mcpagent"
+    cd "$INSTALL_DIR/src/onemcp"
     mvn clean package spring-boot:repackage -DskipTests -q
 
     if [ $? -eq 0 ]; then
