@@ -1,0 +1,59 @@
+---
+description: Application settings and exposed routes.
+---
+
+# Configuration & Endpoints
+
+Minimal settings to run locally or in Docker. Values shown reflect defaults in the image and `application.yaml`.
+
+## Environment Variables
+
+- OPENAI_API_KEY — API key for OpenAI (optional if using other providers)
+- GEMINI_API_KEY — API key for Gemini (optional)
+- ANTHROPIC_API_KEY — API key for Anthropic (optional)
+- OTEL_EXPORTER_OTLP_ENDPOINT — OTLP collector endpoint (default: `http://localhost:4317`)
+- TS_RUNTIME_URL — TypeScript runtime URL (default: `http://localhost:7070`) — optional/placeholder
+- FOUNDATION_DIR — Foundation directory (default: `/var/foundation`)
+
+## Process Arguments
+
+- --process=validate — validates foundation data and exits
+- --process=regression — runs regression test suite and exits
+- --process=standard (default) — starts MCP server + orchestrator
+
+These can be passed via `APP_ARGS` in Docker:
+
+```bash
+# Validation mode
+docker run --rm -e APP_ARGS="--process=validate" admingentoro/gentoro:latest
+
+# Regression mode
+docker run --rm -e APP_ARGS="--process=regression" admingentoro/gentoro:latest
+
+# Standard mode (default)
+docker run --rm -p 8080:8080 admingentoro/gentoro:latest
+```
+
+## Foundation Directory Structure
+
+The process modes expect a foundation directory with the following structure:
+
+```
+foundation/
+├── Agent.md                    # Required: Agent configuration
+├── apis/                       # Optional: OpenAPI specifications
+│   └── *.yaml
+├── docs/                       # Optional: Documentation files
+│   └── *.md
+├── regression/                 # Optional: Regression test files
+│   └── *.yaml
+└── state/                      # Auto-generated: Knowledge base state
+    └── knowledge-base-state.json  # Indexed docs, APIs, and content signature
+```
+
+## MCP Endpoint
+
+- Path: `/mcp` (HTTP stream)
+- Example URL: `http://localhost:8080/mcp`
+
+Client connections must speak the Model Context Protocol over HTTP streaming.

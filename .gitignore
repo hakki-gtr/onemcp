@@ -1,0 +1,55 @@
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Runtime state generation
+src/acme-analytics-server/mcpagent-handbook/state
+
+# IDEs and editors
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+venv/
+.venv/
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+.next/
+
+# Logs
+*.log
+
+# Java / Maven / Gradle
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.iml
+.gradle/
+build/
+
+# Misc
+dist/
+coverage/
+.cache/
+
+package-lock.json
+
+# Local test env files (never commit)
+.env.local
+src/mcpagent/src/main/resources/application-dev.yaml
+
+# Docs
+docs/out/

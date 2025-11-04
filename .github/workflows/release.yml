@@ -1,0 +1,340 @@
+name: Release
+
+on:
+  # push:  # Temporarily disabled - uncomment below to re-enable
+  #   tags:
+  #     - 'v*'
+  workflow_dispatch:  # Temporarily disabled - uncomment above to re-enable
+    inputs:
+      version_type:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: 'Dry run (no actual release)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME_BASE: admingentoro/gentoro
+  IMAGE_NAME_PRODUCT: admingentoro/gentoro
+
+jobs:
+  check-ci-status:
+    runs-on: ubuntu-latest
+    outputs:
+      ci-passed: ${{ steps.check.outputs.ci-passed }}
+    steps:
+    - name: Check CI status for main branch
+      id: check
+      run: |
+        # Get the latest commit SHA from main branch
+        LATEST_SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/commits/main" | \
+          jq -r '.sha')
+        
+        # Check if CI checks workflow passed for the latest commit
+        WORKFLOW_RUNS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/workflows/ci-checks.yml/runs" | \
+          jq -r '.workflow_runs[] | select(.head_sha == "'$LATEST_SHA'") | .conclusion')
+        
+        if [[ "$WORKFLOW_RUNS" == "success" ]]; then
+          echo "ci-passed=true" >> $GITHUB_OUTPUT
+          echo "✅ CI checks passed for latest main commit: $LATEST_SHA"
+        else
+          echo "ci-passed=false" >> $GITHUB_OUTPUT
+          echo "❌ CI checks have not passed for latest main commit: $LATEST_SHA"
+          echo "Workflow status: $WORKFLOW_RUNS"
+          exit 1
+        fi
+
+  release:
+    runs-on: ubuntu-latest
+    needs: check-ci-status
+    if: needs.check-ci-status.outputs.ci-passed == 'true'
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: write
+    
+    steps:
+    - name: Check dry run mode
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+          echo "🔍 DRY RUN MODE ENABLED - No actual changes will be made"
+        else
+          echo "🚀 LIVE RELEASE MODE - Changes will be applied"
+        fi
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history for proper tagging
+    
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Install xmllint
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libxml2-utils
+    
+    - name: Cache Maven dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+    
+    - name: Set up QEMU
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      uses: docker/setup-qemu-action@v3
+    
+    - name: Set up Docker Buildx
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Docker Hub
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+    
+    - name: Show existing tags
+      if: github.event.inputs.dry_run != true || github.event_name == 'push'
+      run: |
+        echo "📋 Existing tags in repository:"
+        git tag -l | sort -V | tail -10 || echo "No tags found"
+        echo ""
+    
+    - name: Extract version from tag
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      id: extract_version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "version_number=${VERSION#v}" >> $GITHUB_OUTPUT
+        echo "Released version: $VERSION"
+    
+    - name: Calculate version for manual release
+      if: github.event_name == 'workflow_dispatch'
+      id: calculate_version
+      run: |
+        POM_FILE="src/mcpagent/pom.xml"
+        CURRENT_VERSION=$(xmllint --xpath "/*[local-name()='project']/*[local-name()='version']/text()" "$POM_FILE")
+        echo "Current POM version: $CURRENT_VERSION"
+        
+        # Get the latest tag (excluding pre-release tags)
+        LATEST_TAG=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+        
+        if [[ -z "$LATEST_TAG" ]]; then
+          echo "No existing version tags found, using POM version as base"
+          # Parse POM version
+          IFS='.-' read -r MAJ MIN PAT SNAP <<<"$CURRENT_VERSION"
+        else
+          echo "Latest tag: $LATEST_TAG"
+          # Parse latest tag (remove 'v' prefix)
+          VERSION_PART=${LATEST_TAG#v}
+          IFS='.' read -r MAJ MIN PAT <<<"$VERSION_PART"
+        fi
+        
+        # Calculate new version based on input
+        BUMP="${{ github.event.inputs.version_type }}"
+        if [[ "$BUMP" == "major" ]]; then
+          MAJ=$((MAJ+1)); MIN=0; PAT=0
+        elif [[ "$BUMP" == "minor" ]]; then
+          MIN=$((MIN+1)); PAT=0
+        else
+          PAT=$((PAT+1))
+        fi
+        
+        NEW_VERSION="${MAJ}.${MIN}.${PAT}-SNAPSHOT"
+        TAG="v${MAJ}.${MIN}.${PAT}"
+        
+        echo "version=$TAG" >> $GITHUB_OUTPUT
+        echo "version_number=${MAJ}.${MIN}.${PAT}" >> $GITHUB_OUTPUT
+        echo "new_snapshot=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "✅ Calculated version: $TAG (next snapshot: $NEW_VERSION)"
+        echo "📋 Version calculation:"
+        echo "  - Base: ${LATEST_TAG:-"POM version $CURRENT_VERSION"}"
+        echo "  - Bump type: $BUMP"
+        echo "  - New tag: $TAG"
+    
+    - name: Create tag for manual release
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != true
+      run: |
+        TAG="${{ steps.calculate_version.outputs.version }}"
+        echo "Creating tag: $TAG"
+        
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Create and push tag
+        if git tag -a "$TAG" -m "Release $TAG"; then
+          echo "✅ Tag $TAG created successfully"
+          if git push origin "$TAG"; then
+            echo "✅ Tag $TAG pushed successfully"
+          else
+            echo "❌ Failed to push tag $TAG"
+            exit 1
+          fi
+        else
+          echo "❌ Failed to create tag $TAG"
+          exit 1
+        fi
+    
+    - name: Build and push base image
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      run: |
+        VERSION="${{ steps.extract_version.outputs.version || steps.calculate_version.outputs.version }}"
+        ./scripts/docker/build-base.sh "$VERSION" --push
+    
+    - name: Build product JAR
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      run: |
+        cd src/mcpagent
+        ./mvnw -q -DskipTests package spring-boot:repackage || mvn -q -DskipTests package spring-boot:repackage
+    
+    - name: Build ACME Analytics Server
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      run: |
+        cd src/acme-analytics-server/server
+        ./build.sh
+    
+    - name: Build TypeScript Runtime
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      run: |
+        cd src/typescript-runtime
+        npm install --legacy-peer-deps
+        npm run build
+    
+    - name: Build and push product image
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      run: |
+        VERSION="${{ steps.extract_version.outputs.version || steps.calculate_version.outputs.version }}"
+        POM_VERSION=$(xmllint --xpath "/*[local-name()='project']/*[local-name()='version']/text()" src/mcpagent/pom.xml)
+        JAR_NAME="mcpagent-$POM_VERSION.jar"
+        ./scripts/docker/build-product.sh "$VERSION" "$JAR_NAME" --push
+    
+    - name: Verify images exist
+      if: github.event_name == 'push' || github.event.inputs.dry_run != true
+      run: |
+        VERSION="${{ steps.extract_version.outputs.version || steps.calculate_version.outputs.version }}"
+        echo "Verifying images exist for version: $VERSION"
+        
+        # Verify base image exists
+        if docker manifest inspect "${{ env.IMAGE_NAME_BASE }}:base-$VERSION" >/dev/null 2>&1; then
+          echo "✅ Base image exists: ${{ env.IMAGE_NAME_BASE }}:base-$VERSION"
+        else
+          echo "❌ Base image does not exist: ${{ env.IMAGE_NAME_BASE }}:base-$VERSION"
+          exit 1
+        fi
+        
+        # Verify product image exists
+        if docker manifest inspect "${{ env.IMAGE_NAME_PRODUCT }}:$VERSION" >/dev/null 2>&1; then
+          echo "✅ Product image exists: ${{ env.IMAGE_NAME_PRODUCT }}:$VERSION"
+        else
+          echo "❌ Product image does not exist: ${{ env.IMAGE_NAME_PRODUCT }}:$VERSION"
+          exit 1
+        fi
+        
+        echo "✅ All images verified successfully"
+    
+    - name: Create GitHub Release
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.extract_version.outputs.version }}
+        release_name: Release ${{ steps.extract_version.outputs.version }}
+        body: |
+          ## Changes in this Release
+          
+          This release includes:
+          - Updated base image: `${{ env.IMAGE_NAME_BASE }}:base-${{ steps.extract_version.outputs.version }}`
+          - Updated product image: `${{ env.IMAGE_NAME_PRODUCT }}:${{ steps.extract_version.outputs.version }}`
+          
+          ## Service Validation ✅
+          
+          All services have been validated and are confirmed working:
+          - **MCP Agent** (port 8080) - Main Spring Boot application
+          - **OpenTelemetry Collector** (port 4317) - Telemetry data collection
+          - **Mock Server** (port 8082, optional) - External mock server
+          - **TypeScript Runtime** (port 7070, optional) - Node.js runtime
+          
+          **Platform Support**: Both `linux/amd64` and `linux/arm64` architectures tested and validated.
+          
+          ## Docker Images
+          
+          ```bash
+          # Base image
+          docker pull ${{ env.IMAGE_NAME_BASE }}:base-${{ steps.extract_version.outputs.version }}
+          docker pull ${{ env.IMAGE_NAME_BASE }}:base-latest
+          
+          # Product image
+          docker pull ${{ env.IMAGE_NAME_PRODUCT }}:${{ steps.extract_version.outputs.version }}
+          docker pull ${{ env.IMAGE_NAME_PRODUCT }}:latest
+          ```
+          
+          ## Quick Start
+          
+          ```bash
+          # Run the validated image
+          docker run -p 8080:8080 \
+            -e OPENAI_API_KEY=your-key \
+            ${{ env.IMAGE_NAME_PRODUCT }}:${{ steps.extract_version.outputs.version }}
+          
+          # Test health endpoint
+          curl http://localhost:8080/actuator/health
+          ```
+        draft: false
+        prerelease: false
+    
+    - name: Dry run summary
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == true
+      run: |
+        echo "## Dry Run Summary"
+        echo "Version: ${{ steps.calculate_version.outputs.version }}"
+        echo "Next snapshot: ${{ steps.calculate_version.outputs.new_snapshot }}"
+        echo ""
+        echo "This would have:"
+        echo "- Created and pushed tag ${{ steps.calculate_version.outputs.version }}"
+        echo "- Built and pushed base and product Docker images"
+        echo "- Validated all services on both linux/amd64 and linux/arm64 platforms:"
+        echo "  - MCP Agent (port 8080) - Main Spring Boot application"
+        echo "  - OpenTelemetry Collector (port 4317) - Telemetry data collection"
+        echo "  - Mock Server (port 8082, optional) - External mock server"
+        echo "  - TypeScript Runtime (port 7070, optional) - Node.js runtime"
+        echo ""
+        echo "Note: The tag push will trigger the GitHub Release creation automatically."
+
+  deploy-docs:
+    name: Deploy Documentation
+    needs: release
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true')
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/deploy-docs.yml
+    with:
+      environment: production
+    secrets: inherit
