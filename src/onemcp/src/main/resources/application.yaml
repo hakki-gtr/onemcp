@@ -40,6 +40,13 @@ http:
         OneMCP entry point, express your request using Natural Language.
 
 
+arangodb:
+  host: ${env:ARANGODB_HOST:-localhost}
+  port: ${env:ARANGODB_PORT:-8529}
+  user: ${env:ARANGODB_USER:-root}
+  password: ${env:ARANGODB_PASSWORD:-}
+  database: ${env:ARANGODB_DATABASE:-onemcp_kb}
+
 llm:
   active-profile: gemini-flash
   ollama:

@@ -20,6 +20,7 @@ import com.gentoro.onemcp.model.LlmClientFactory;
 import com.gentoro.onemcp.orchestrator.OrchestratorService;
 import com.gentoro.onemcp.prompt.PromptRepository;
 import com.gentoro.onemcp.prompt.PromptRepositoryFactory;
+import com.gentoro.onemcp.indexing.ArangoDbService;
 import java.io.File;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,6 +41,7 @@ public class OneMcp {
   private KnowledgeBase knowledgeBase;
   private LlmClient llmClient;
   private OrchestratorService orchestrator;
+  private ArangoDbService arangoDbService;
 
   private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
   private final CountDownLatch shutdownLatch = new CountDownLatch(1);
@@ -71,6 +73,15 @@ public class OneMcp {
     }
 
     this.llmClient = LlmClientFactory.createProvider(this);
+
+    // Initialize ArangoDB service for knowledge base indexing
+    try {
+      this.arangoDbService = new ArangoDbService(this);
+      this.arangoDbService.initialize();
+    } catch (Exception e) {
+      log.warn("Failed to initialize ArangoDB service, continuing without it", e);
+      // ArangoDB is optional, so we continue without it
+    }
 
     // Initialize shared Jetty server and register components
     this.httpServer = new EmbeddedJettyServer(this);
@@ -157,6 +168,9 @@ public class OneMcp {
     if (shuttingDown.compareAndSet(false, true)) {
       try {
         closeQuietly(httpServer);
+        if (arangoDbService != null) {
+          arangoDbService.shutdown();
+        }
       } finally {
         shutdownLatch.countDown();
       }
@@ -193,6 +207,10 @@ public class OneMcp {
 
   public OrchestratorService orchestrator() {
     return orchestrator;
+  }
+
+  public ArangoDbService arangoDbService() {
+    return arangoDbService;
   }
 
   /**

@@ -1,0 +1,25 @@
+handbook:
+  location: ${env:HANDBOOK_DIR:-classpath:acme-handbook}
+
+prompt:
+  location: classpath:prompts
+
+logging:
+  level:
+    root: WARN
+    com.gentoro.onemcp: INFO
+
+http:
+  port: 8080
+  hostname: 0.0.0.0
+
+arangodb:
+  host: ${env:ARANGODB_HOST:-localhost}
+  port: ${env:ARANGODB_PORT:-8529}
+  user: ${env:ARANGODB_USER:-root}
+  password: ${env:ARANGODB_PASSWORD:-test123}
+  database: ${env:ARANGODB_DATABASE:-onemcp_kb_test}
+
+llm:
+  active-profile: gemini-flash
+

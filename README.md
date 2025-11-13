@@ -8,7 +8,6 @@ It removes the need to handcraft MCP tools or connectors while achieving high pe
 
 ## 🚀 Quick Start
 
-
 First, install the CLI:
 
 ```bash
@@ -72,3 +71,47 @@ Full documentation is available at [https://onemcp.gentoro.com/docs](https://one
 ### ℹ️ CLI Details
 
 For detailed CLI documentation, all commands, and advanced features, see the [CLI README](cli/README.md).
+
+## 📋 Requirements
+
+- **Java 21+** - Required for running the OneMCP runtime
+- **ArangoDB** - Required for knowledge base indexing (DAG storage)
+  - Can be run via Docker (recommended) or installed locally
+  - Default connection: `localhost:8529`
+  - Default credentials: `root` / `test123` (configurable)
+
+### ArangoDB Setup
+
+#### Option 1: Docker (Recommended)
+
+```bash
+docker run -e ARANGO_ROOT_PASSWORD=test123 -p 8529:8529 -d arangodb
+```
+
+Verify ArangoDB is running:
+```bash
+curl -u root:test123 http://localhost:8529/_api/version
+```
+
+#### Option 2: Local Installation
+
+1. Download ArangoDB from [https://www.arangodb.com/download/](https://www.arangodb.com/download/)
+2. Install and start ArangoDB service
+3. Configure connection in `application.yaml` or via environment variables:
+   ```yaml
+   arangodb:
+     host: localhost
+     port: 8529
+     user: root
+     password: your_password
+     database: onemcp_kb
+   ```
+
+#### Environment Variables
+
+You can override ArangoDB settings using environment variables:
+- `ARANGODB_HOST` (default: localhost)
+- `ARANGODB_PORT` (default: 8529)
+- `ARANGODB_USER` (default: root)
+- `ARANGODB_PASSWORD` (default: empty)
+- `ARANGODB_DATABASE` (default: onemcp_kb)
