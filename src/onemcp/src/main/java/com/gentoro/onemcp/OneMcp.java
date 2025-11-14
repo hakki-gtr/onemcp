@@ -7,20 +7,24 @@ import ch.qos.logback.core.Appender;
 import ch.qos.logback.core.ConsoleAppender;
 import ch.qos.logback.core.rolling.RollingFileAppender;
 import ch.qos.logback.core.rolling.TimeBasedRollingPolicy;
+// COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK - imports kept for type declarations
 import com.gentoro.onemcp.acme.AcmeServer;
 import com.gentoro.onemcp.actuator.ActuatorService;
 import com.gentoro.onemcp.context.KnowledgeBase;
+// COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK - imports kept for type declarations
 import com.gentoro.onemcp.exception.ExecutionException;
 import com.gentoro.onemcp.exception.KnowledgeBaseException;
 import com.gentoro.onemcp.exception.StateException;
+// COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK - imports kept for type declarations
 import com.gentoro.onemcp.http.EmbeddedJettyServer;
 import com.gentoro.onemcp.mcp.McpServer;
+// COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK - imports kept for type declarations
 import com.gentoro.onemcp.model.LlmClient;
 import com.gentoro.onemcp.model.LlmClientFactory;
+// COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK - imports kept for type declarations
 import com.gentoro.onemcp.orchestrator.OrchestratorService;
 import com.gentoro.onemcp.prompt.PromptRepository;
 import com.gentoro.onemcp.prompt.PromptRepositoryFactory;
-import com.gentoro.onemcp.indexing.ArangoDbService;
 import java.io.File;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,7 +45,6 @@ public class OneMcp {
   private KnowledgeBase knowledgeBase;
   private LlmClient llmClient;
   private OrchestratorService orchestrator;
-  private ArangoDbService arangoDbService;
 
   private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
   private final CountDownLatch shutdownLatch = new CountDownLatch(1);
@@ -72,37 +75,32 @@ public class OneMcp {
       throw new KnowledgeBaseException("Failed to ingest Handbook content", e);
     }
 
-    this.llmClient = LlmClientFactory.createProvider(this);
+    // COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK
+    // this.llmClient = LlmClientFactory.createProvider(this);
 
-    // Initialize ArangoDB service for knowledge base indexing
-    try {
-      this.arangoDbService = new ArangoDbService(this);
-      this.arangoDbService.initialize();
-    } catch (Exception e) {
-      log.warn("Failed to initialize ArangoDB service, continuing without it", e);
-      // ArangoDB is optional, so we continue without it
-    }
-
+    // COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK
     // Initialize shared Jetty server and register components
-    this.httpServer = new EmbeddedJettyServer(this);
-    httpServer.prepare();
+    // this.httpServer = new EmbeddedJettyServer(this);
+    // httpServer.prepare();
 
-    try {
-      // Register ACME analytics API
-      new AcmeServer(this).register();
-      // Register actuator health endpoint
-      new ActuatorService(this).register();
-      // Register MCP servlet
-      new McpServer(this).register();
+    // COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK
+    // try {
+    //   // Register ACME analytics API
+    //   new AcmeServer(this).register();
+    //   // Register actuator health endpoint
+    //   new ActuatorService(this).register();
+    //   // Register MCP servlet
+    //   new McpServer(this).register();
 
-      // Start Jetty (non-blocking)
-      httpServer.start();
-    } catch (Exception e) {
-      shutdown();
-      throw new ExecutionException("Could not start http server", e);
-    }
+    //   // Start Jetty (non-blocking)
+    //   httpServer.start();
+    // } catch (Exception e) {
+    //   shutdown();
+    //   throw new ExecutionException("Could not start http server", e);
+    // }
 
-    this.orchestrator = new OrchestratorService(this);
+    // COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK
+    // this.orchestrator = new OrchestratorService(this);
 
     // If running in interactive mode: disable STDOUT appender and enable file-based logging
     String mode = startupParameters().getParameter("mode", String.class);
@@ -110,21 +108,22 @@ public class OneMcp {
       configureFileOnlyLogging();
     }
 
-    switch (startupParameters().getParameter("mode", String.class)) {
-      case "interactive":
-        this.orchestrator.enterInteractiveMode();
-        break;
-      case "dry-run":
-        this.orchestrator.handlePrompt("test");
-        break;
-      case "server":
-        // server is always started
-        break;
-      default:
-        shutdown();
-        throw new IllegalArgumentException(
-            "Invalid mode: " + startupParameters().getParameter("mode", String.class));
-    }
+    // COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK
+    // switch (startupParameters().getParameter("mode", String.class)) {
+    //   case "interactive":
+    //     this.orchestrator.enterInteractiveMode();
+    //     break;
+    //   case "dry-run":
+    //     this.orchestrator.handlePrompt("test");
+    //     break;
+    //   case "server":
+    //     // server is always started
+    //     break;
+    //   default:
+    //     shutdown();
+    //     throw new IllegalArgumentException(
+    //         "Invalid mode: " + startupParameters().getParameter("mode", String.class));
+    // }
   }
 
   /**
@@ -168,9 +167,6 @@ public class OneMcp {
     if (shuttingDown.compareAndSet(false, true)) {
       try {
         closeQuietly(httpServer);
-        if (arangoDbService != null) {
-          arangoDbService.shutdown();
-        }
       } finally {
         shutdownLatch.countDown();
       }
@@ -207,10 +203,6 @@ public class OneMcp {
 
   public OrchestratorService orchestrator() {
     return orchestrator;
-  }
-
-  public ArangoDbService arangoDbService() {
-    return arangoDbService;
   }
 
   /**
