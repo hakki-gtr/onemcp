@@ -104,6 +104,10 @@ public class OperationNode implements GraphNode {
     map.put("_key", key);
     map.put("nodeType", getNodeType());
     map.put("operationId", operationId);
+    // Create display name for node label
+    String displayName = method != null ? method.toUpperCase() + " " + path : operationId;
+    map.put("name", displayName);  // Used for node label in ArangoDB UI
+    map.put("label", displayName);  // Alternative label field
     map.put("method", method);
     map.put("path", path);
     map.put("summary", summary);

@@ -42,6 +42,7 @@ public class GraphIndexingService {
   private final ArangoDbService arangoDbService;
   private final DocumentChunker documentChunker;
   private final ObjectMapper jsonMapper;
+  private final String handbookName;
 
   /**
    * Create a new graph indexing service.
@@ -50,7 +51,8 @@ public class GraphIndexingService {
    */
   public GraphIndexingService(OneMcp oneMcp) {
     this.oneMcp = oneMcp;
-    this.arangoDbService = new ArangoDbService(oneMcp);
+    this.handbookName = oneMcp.knowledgeBase().getHandbookName();
+    this.arangoDbService = new ArangoDbService(oneMcp, handbookName);
     this.documentChunker = new DocumentChunker();
     this.jsonMapper = new ObjectMapper();
   }
@@ -89,6 +91,9 @@ public class GraphIndexingService {
 
       // Index general documentation
       indexGeneralDocumentation();
+
+      // Ensure graph exists after indexing (in case it wasn't created during clear)
+      arangoDbService.ensureGraphExists();
 
       log.info("Knowledge base graph indexing completed successfully");
     } catch (Exception e) {

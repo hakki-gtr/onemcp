@@ -65,7 +65,7 @@ class ArangoDbServiceIntegrationTest {
       throw new RuntimeException("Failed to set up test configuration", e);
     }
 
-    arangoDbService = new ArangoDbService(oneMcp);
+    arangoDbService = new ArangoDbService(oneMcp, "test_handbook");
   }
 
   @AfterEach

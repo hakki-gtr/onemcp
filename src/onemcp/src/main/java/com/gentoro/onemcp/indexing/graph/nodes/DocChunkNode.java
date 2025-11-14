@@ -88,6 +88,14 @@ public class DocChunkNode implements GraphNode {
     Map<String, Object> map = new HashMap<>();
     map.put("_key", key);
     map.put("nodeType", getNodeType());
+    // Create display name for node label (use title if available, otherwise truncated content)
+    String displayName = title != null && !title.isEmpty() 
+        ? title 
+        : (content != null && content.length() > 50 
+            ? content.substring(0, 50) + "..." 
+            : content);
+    map.put("name", displayName);  // Used for node label in ArangoDB UI
+    map.put("label", displayName);  // Alternative label field
     map.put("content", content);
     map.put("sourceUri", sourceUri);
     map.put("sourceType", sourceType);

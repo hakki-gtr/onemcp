@@ -25,12 +25,12 @@ class ArangoDbServiceTest {
   void setUp() {
     // Use lenient mocking to avoid issues with OneMcp class
     lenient().when(oneMcp.configuration()).thenReturn(configuration);
-    arangoDbService = new ArangoDbService(oneMcp);
+    arangoDbService = new ArangoDbService(oneMcp, "test_handbook");
   }
 
   @Test
   void testConstructor() {
-    ArangoDbService service = new ArangoDbService(oneMcp);
+    ArangoDbService service = new ArangoDbService(oneMcp, "test_handbook");
     assertNotNull(service);
   }
 

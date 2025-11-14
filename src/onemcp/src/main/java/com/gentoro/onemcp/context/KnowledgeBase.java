@@ -44,6 +44,7 @@ public class KnowledgeBase {
   private final OneMcp oneMcp;
   private Path handbookLocation = null;
   private GraphIndexingService graphIndexingService;
+  private String handbookName = null;
 
   /**
    * Create a new knowledge base bound to the provided configuration.
@@ -519,7 +520,24 @@ public class KnowledgeBase {
     }
 
     handbookLocation = basePath;
+    
+    // Extract handbook name from path
+    handbookName = basePath.getFileName().toString();
+    
     log.trace("Assigned handbook location: {}", handbookLocation);
+    log.trace("Handbook name: {}", handbookName);
     return basePath;
+  }
+
+  /**
+   * Get the handbook name (derived from the handbook folder name).
+   *
+   * @return handbook name
+   */
+  public String getHandbookName() {
+    if (handbookName == null) {
+      handbookPath(); // Initialize if not already done
+    }
+    return handbookName != null ? handbookName : "unknown_handbook";
   }
 }

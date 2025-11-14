@@ -3,6 +3,7 @@ package com.gentoro.onemcp.indexing;
 import com.arangodb.ArangoDB;
 import com.arangodb.ArangoDatabase;
 import com.arangodb.entity.CollectionType;
+import com.arangodb.entity.EdgeDefinition;
 import com.arangodb.model.CollectionCreateOptions;
 import com.gentoro.onemcp.OneMcp;
 import com.gentoro.onemcp.exception.ConfigException;
@@ -10,6 +11,8 @@ import com.gentoro.onemcp.exception.IoException;
 import com.gentoro.onemcp.indexing.graph.GraphEdge;
 import com.gentoro.onemcp.indexing.graph.nodes.GraphNode;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +43,7 @@ public class ArangoDbService {
   private static final String EDGES_COLLECTION = "edges";
 
   private final OneMcp oneMcp;
+  private final String handbookName;
   private ArangoDB arangoDB;
   private ArangoDatabase database;
   private boolean initialized = false;
@@ -48,9 +52,11 @@ public class ArangoDbService {
    * Create a new ArangoDB service bound to the provided OneMcp context.
    *
    * @param oneMcp Main entry point for OneMCP application context
+   * @param handbookName Name of the handbook being indexed
    */
-  public ArangoDbService(OneMcp oneMcp) {
+  public ArangoDbService(OneMcp oneMcp, String handbookName) {
     this.oneMcp = oneMcp;
+    this.handbookName = handbookName;
   }
 
   /**
@@ -99,6 +105,9 @@ public class ArangoDbService {
       // Create edge collection for relationships
       createCollectionIfNotExists(EDGES_COLLECTION, CollectionType.EDGES);
 
+      // Note: Named graph will be created after data is indexed (or cleared)
+      // This ensures the graph is created with the correct handbook name
+
       // Create indexes for better query performance
       createIndexes();
 
@@ -125,6 +134,131 @@ public class ArangoDbService {
     } catch (Exception e) {
       throw new IoException("Failed to create collection: " + name, e);
     }
+  }
+
+  /**
+   * Create a named graph for visualization in ArangoDB UI.
+   *
+   * <p>Creates a General Graph that includes all vertex collections (entities, operations,
+   * doc_chunks, examples) and the edges collection. This allows visualization in the Graphs
+   * section of ArangoDB UI with proper edge label support.
+   */
+  private void createNamedGraph() {
+    try {
+      // Always get handbook name from knowledge base to ensure it's current
+      String actualHandbookName;
+      try {
+        actualHandbookName = oneMcp.knowledgeBase().getHandbookName();
+        log.debug("Retrieved handbook name from knowledge base: {}", actualHandbookName);
+        
+        // If still unknown, try to force initialization
+        if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
+          log.warn("Handbook name is unknown, forcing handbook path resolution");
+          oneMcp.knowledgeBase().handbookPath(); // Force initialization
+          actualHandbookName = oneMcp.knowledgeBase().getHandbookName();
+          log.debug("After forcing initialization, handbook name: {}", actualHandbookName);
+        }
+        
+        // Fallback if still unknown
+        if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
+          log.warn("Could not determine handbook name, using default");
+          actualHandbookName = "onemcp_handbook";
+        }
+      } catch (Exception e) {
+        log.warn("Could not retrieve handbook name, using default", e);
+        actualHandbookName = "onemcp_handbook";
+      }
+      
+      String graphName = sanitizeGraphName(actualHandbookName);
+      
+      // Delete old graph with wrong name if it exists
+      String oldGraphName = sanitizeGraphName("unknown_handbook");
+      if (!graphName.equals(oldGraphName) && database.graph(oldGraphName).exists()) {
+        log.info("Deleting old graph with incorrect name: {}", oldGraphName);
+        try {
+          database.graph(oldGraphName).drop();
+        } catch (Exception e) {
+          log.debug("Could not delete old graph", e);
+        }
+      }
+      
+      // Check if graph already exists
+      if (database.graph(graphName).exists()) {
+        log.info("Graph '{}' already exists, skipping creation", graphName);
+        logGraphVisualizationInstructions(graphName);
+        return;
+      }
+      
+      // Define all vertex collections as arrays
+      String[] vertexCollections = new String[] {
+          ENTITIES_COLLECTION,
+          OPERATIONS_COLLECTION,
+          DOC_CHUNKS_COLLECTION,
+          EXAMPLES_COLLECTION
+      };
+      
+      // Create edge definition - edges can connect any vertex collection to any other
+      EdgeDefinition edgeDefinition = new EdgeDefinition();
+      edgeDefinition.collection(EDGES_COLLECTION);
+      edgeDefinition.from(vertexCollections);
+      edgeDefinition.to(vertexCollections);
+      
+      List<EdgeDefinition> edgeDefinitions = new ArrayList<>();
+      edgeDefinitions.add(edgeDefinition);
+      
+      // Create the graph with edge definitions
+      database.createGraph(graphName, edgeDefinitions);
+      log.info("Created named graph '{}' with {} vertex collections and edge collection '{}'", 
+          graphName, vertexCollections.length, EDGES_COLLECTION);
+      
+      logGraphVisualizationInstructions(graphName);
+      
+    } catch (Exception e) {
+      log.warn("Failed to create named graph, continuing without formal graph definition", e);
+      log.info("You can still visualize using queries in the Queries tab");
+    }
+  }
+  
+  /**
+   * Log instructions for visualizing the graph in ArangoDB UI.
+   *
+   * @param graphName the name of the created graph
+   */
+  private void logGraphVisualizationInstructions(String graphName) {
+    log.info("");
+    log.info("=== TO VISUALIZE GRAPH WITH EDGE LABELS ===");
+    log.info("");
+    log.info("Method 1 - Use Graphs section (RECOMMENDED):");
+    log.info("   1. Go to ArangoDB UI -> Graphs section (left sidebar)");
+    log.info("   2. Click on graph: '{}'", graphName);
+    log.info("   3. Graph viewer will open showing all nodes and edges");
+    log.info("   4. Click Settings (gear icon) in graph viewer");
+    log.info("   5. Scroll to 'Edges' section");
+    log.info("   6. Find 'Edge label attribute' field (or 'Edge labels')");
+    log.info("   7. Try these values in order until labels appear:");
+    log.info("      - name (most common)");
+    log.info("      - label");
+    log.info("      - edgeLabel");
+    log.info("      - edgeType");
+    log.info("   8. Click 'Apply'");
+    log.info("   9. Edge labels will now appear on the arrows!");
+    log.info("");
+    log.info("NOTE: If 'Edge label attribute' field doesn't exist, labels are stored");
+    log.info("      in the 'name' field and should display automatically in newer versions.");
+    log.info("");
+    log.info("Method 2 - Query-based visualization:");
+    log.info("   FOR e IN edges RETURN e");
+    log.info("   Then click 'Graph' view button");
+    log.info("");
+    log.info("=== EDGE TYPES IN YOUR GRAPH ===");
+    log.info("");
+    log.info("Edge types:");
+    log.info("- HAS_OPERATION: Entity -> Operation");
+    log.info("- HAS_EXAMPLE: Operation -> Example");
+    log.info("- HAS_DOCUMENTATION: Operation -> Doc Chunk");
+    log.info("- FOLLOWS_CHUNK: Doc Chunk -> Doc Chunk (sequential)");
+    log.info("");
+    log.info("All edge types are stored in: label, name, edgeLabel, edgeType fields");
   }
 
   /**
@@ -212,6 +346,12 @@ public class ArangoDbService {
       
       edgeData.put("_from", fromCollection + "/" + edge.getFromKey());
       edgeData.put("_to", toCollection + "/" + edge.getToKey());
+      
+      // Add label fields for ArangoDB UI graph visualization
+      // Keep only essential fields: name (most common), label (alternative), edgeType (already from toMap)
+      String edgeTypeName = edge.getEdgeType().name();
+      edgeData.put("name", edgeTypeName);  // Primary field - ArangoDB UI often uses this
+      edgeData.put("label", edgeTypeName);  // Alternative field for UI
 
       database.collection(EDGES_COLLECTION).insertDocument(edgeData);
       log.debug("Successfully stored edge: {} -> {}", edge.getFromKey(), edge.getToKey());
@@ -283,7 +423,29 @@ public class ArangoDbService {
   }
 
   /**
+   * Sanitize a graph name to be valid for ArangoDB.
+   *
+   * @param name the graph name to sanitize
+   * @return sanitized graph name
+   */
+  private String sanitizeGraphName(String name) {
+    // ArangoDB graph names: alphanumeric, underscore, hyphen
+    // Must start with letter
+    String sanitized = name.replaceAll("[^a-zA-Z0-9_\\-]", "_").toLowerCase();
+    
+    // Ensure it starts with a letter
+    if (!sanitized.matches("^[a-zA-Z].*")) {
+      sanitized = "handbook_" + sanitized;
+    }
+    
+    return sanitized;
+  }
+
+  /**
    * Clear all graph data from the database. Use with caution!
+   *
+   * <p>This method clears all collections and drops any existing graphs to ensure
+   * a clean state for re-indexing.
    *
    * @throws IoException if clear operation fails
    */
@@ -295,15 +457,40 @@ public class ArangoDbService {
 
     log.warn("Clearing all graph data from ArangoDB");
     try {
+      // Clear all collections
       database.collection(ENTITIES_COLLECTION).truncate();
       database.collection(OPERATIONS_COLLECTION).truncate();
       database.collection(DOC_CHUNKS_COLLECTION).truncate();
       database.collection(EXAMPLES_COLLECTION).truncate();
       database.collection(EDGES_COLLECTION).truncate();
-      log.info("Successfully cleared all graph data");
+      
+      // Drop all graphs to ensure clean state
+      try {
+        Collection<com.arangodb.entity.GraphEntity> graphs = database.getGraphs();
+        for (com.arangodb.entity.GraphEntity graphEntity : graphs) {
+          String graphName = graphEntity.getName();
+          log.info("Dropping graph: {}", graphName);
+          database.graph(graphName).drop();
+        }
+      } catch (Exception e) {
+        log.debug("Could not list or drop graphs (may not exist)", e);
+      }
+      
+      log.info("Successfully cleared all graph data and dropped existing graphs");
+      // Note: Graph will be created after indexing completes when handbook name is available
     } catch (Exception e) {
       throw new IoException("Failed to clear graph data", e);
     }
+  }
+  
+  /**
+   * Ensure the named graph exists. Call this after indexing is complete.
+   */
+  public void ensureGraphExists() {
+    if (!initialized || database == null) {
+      return;
+    }
+    createNamedGraph();
   }
 
   /**
