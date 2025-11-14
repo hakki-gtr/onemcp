@@ -2,30 +2,47 @@ package com.gentoro.onemcp.indexing;
 
 import com.arangodb.ArangoDB;
 import com.arangodb.ArangoDatabase;
+import com.arangodb.entity.CollectionType;
 import com.arangodb.model.CollectionCreateOptions;
 import com.gentoro.onemcp.OneMcp;
 import com.gentoro.onemcp.exception.ConfigException;
 import com.gentoro.onemcp.exception.IoException;
+import com.gentoro.onemcp.indexing.graph.GraphEdge;
+import com.gentoro.onemcp.indexing.graph.nodes.GraphNode;
+
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * ArangoDB service for indexing knowledge base data in DAG (Directed Acyclic Graph) format.
+ * ArangoDB service for indexing knowledge base data in graph format.
  *
- * <p>This service provides features for indexing data as vertices (nodes) and edges
- * (relationships) in ArangoDB. It initializes the necessary collections and provides basic indexing
- * operations.
+ * <p>This service provides features for indexing handbook data as a graph with vertices (nodes) and
+ * edges (relationships) in ArangoDB. It supports multiple node types (entities, operations, doc
+ * chunks, examples) and various relationship types.
+ *
+ * <p>The graph structure enables semantic querying and retrieval based on relationships between
+ * different knowledge base elements.
  */
 public class ArangoDbService {
   private static final org.slf4j.Logger log =
       com.gentoro.onemcp.logging.LoggingService.getLogger(ArangoDbService.class);
 
   private static final String DEFAULT_DATABASE = "onemcp_kb";
-  private static final String VERTICES_COLLECTION = "vertices";
+  
+  // Collection names for different node types
+  private static final String ENTITIES_COLLECTION = "entities";
+  private static final String OPERATIONS_COLLECTION = "operations";
+  private static final String DOC_CHUNKS_COLLECTION = "doc_chunks";
+  private static final String EXAMPLES_COLLECTION = "examples";
+  
+  // Edge collections for different relationship types
   private static final String EDGES_COLLECTION = "edges";
 
   private final OneMcp oneMcp;
   private ArangoDB arangoDB;
   private ArangoDatabase database;
+  private boolean initialized = false;
 
   /**
    * Create a new ArangoDB service bound to the provided OneMcp context.
@@ -43,11 +60,22 @@ public class ArangoDbService {
    * @throws IoException if connection or initialization fails
    */
   public void initialize() {
+    if (initialized) {
+      log.debug("ArangoDB service already initialized");
+      return;
+    }
+
     String host = oneMcp.configuration().getString("arangodb.host", "localhost");
     Integer port = oneMcp.configuration().getInteger("arangodb.port", 8529);
     String user = oneMcp.configuration().getString("arangodb.user", "root");
     String password = oneMcp.configuration().getString("arangodb.password", "");
     String databaseName = oneMcp.configuration().getString("arangodb.database", DEFAULT_DATABASE);
+    Boolean enabled = oneMcp.configuration().getBoolean("arangodb.enabled", false);
+
+    if (!enabled) {
+      log.info("ArangoDB indexing is disabled in configuration");
+      return;
+    }
 
     log.info("Initializing ArangoDB connection: {}:{}", host, port);
 
@@ -62,19 +90,19 @@ public class ArangoDbService {
 
       database = arangoDB.db(databaseName);
 
-      // Create vertices collection if it doesn't exist
-      if (!database.collection(VERTICES_COLLECTION).exists()) {
-        log.info("Creating vertices collection: {}", VERTICES_COLLECTION);
-        database.createCollection(VERTICES_COLLECTION);
-      }
+      // Create document collections for different node types
+      createCollectionIfNotExists(ENTITIES_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(OPERATIONS_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(DOC_CHUNKS_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(EXAMPLES_COLLECTION, CollectionType.DOCUMENT);
 
-      // Create edges collection if it doesn't exist
-      if (!database.collection(EDGES_COLLECTION).exists()) {
-        log.info("Creating edges collection: {}", EDGES_COLLECTION);
-        CollectionCreateOptions options = new CollectionCreateOptions().type(com.arangodb.entity.CollectionType.EDGES);
-        database.createCollection(EDGES_COLLECTION, options);
-      }
+      // Create edge collection for relationships
+      createCollectionIfNotExists(EDGES_COLLECTION, CollectionType.EDGES);
 
+      // Create indexes for better query performance
+      createIndexes();
+
+      initialized = true;
       log.info("ArangoDB service initialized successfully");
     } catch (Exception e) {
       throw new IoException("Failed to initialize ArangoDB service", e);
@@ -82,54 +110,199 @@ public class ArangoDbService {
   }
 
   /**
-   * Index a vertex (node) in the knowledge base DAG.
+   * Create a collection if it doesn't exist.
    *
-   * @param key unique identifier for the vertex
-   * @param data data to index in the vertex
-   * @throws IoException if indexing operation fails
+   * @param name collection name
+   * @param type collection type (DOCUMENT or EDGES)
    */
-  public void storeVertex(String key, Map<String, Object> data) {
-    if (database == null) {
-      throw new IllegalStateException("ArangoDB service not initialized. Call initialize() first.");
-    }
-
+  private void createCollectionIfNotExists(String name, CollectionType type) {
     try {
-      log.trace("Indexing vertex: {}", key);
-      Map<String, Object> vertexData = new java.util.HashMap<>(data);
-      vertexData.put("_key", key);
-      database.collection(VERTICES_COLLECTION).insertDocument(vertexData);
-      log.debug("Successfully indexed vertex: {}", key);
+      if (!database.collection(name).exists()) {
+        log.info("Creating collection: {} (type: {})", name, type);
+        CollectionCreateOptions options = new CollectionCreateOptions().type(type);
+        database.createCollection(name, options);
+      }
     } catch (Exception e) {
-      throw new IoException("Failed to index vertex: " + key, e);
+      throw new IoException("Failed to create collection: " + name, e);
     }
   }
 
   /**
-   * Index an edge (relationship) between two vertices in the knowledge base DAG.
+   * Create indexes on collections for better query performance.
+   */
+  private void createIndexes() {
+    try {
+      // Index on nodeType for all document collections
+      log.debug("Creating indexes for graph collections");
+      
+      // These indexes will be created on-demand by ArangoDB based on query patterns
+      // For now, we rely on the _key index which is automatic
+      
+    } catch (Exception e) {
+      log.warn("Failed to create some indexes, continuing anyway", e);
+    }
+  }
+
+  /**
+   * Store a graph node in the appropriate collection based on its type.
    *
-   * @param fromKey source vertex key
-   * @param toKey target vertex key
-   * @param data additional data to index with the edge
+   * @param node the graph node to store
    * @throws IoException if indexing operation fails
    */
-  public void storeEdge(String fromKey, String toKey, Map<String, Object> data) {
-    if (database == null) {
-      throw new IllegalStateException("ArangoDB service not initialized. Call initialize() first.");
+  public void storeNode(GraphNode node) {
+    if (!initialized || database == null) {
+      log.warn("ArangoDB service not initialized, skipping node storage: {}", node.getKey());
+      return;
     }
 
     try {
-      String edgeKey = fromKey + "_" + toKey;
-      log.trace("Indexing edge: {} -> {}", fromKey, toKey);
+      String collection = getCollectionForNodeType(node.getNodeType());
+      log.trace("Storing node: {} in collection: {}", node.getKey(), collection);
+      
+      Map<String, Object> data = node.toMap();
+      database.collection(collection).insertDocument(data);
+      
+      log.debug("Successfully stored node: {} (type: {})", node.getKey(), node.getNodeType());
+    } catch (Exception e) {
+      throw new IoException("Failed to store node: " + node.getKey(), e);
+    }
+  }
 
-      Map<String, Object> edgeData = new java.util.HashMap<>(data);
+  /**
+   * Store multiple graph nodes in a batch operation.
+   *
+   * @param nodes list of nodes to store
+   * @throws IoException if batch operation fails
+   */
+  public void storeNodes(List<GraphNode> nodes) {
+    if (!initialized || database == null) {
+      log.warn("ArangoDB service not initialized, skipping batch node storage");
+      return;
+    }
+
+    log.debug("Storing {} nodes in batch", nodes.size());
+    for (GraphNode node : nodes) {
+      storeNode(node);
+    }
+  }
+
+  /**
+   * Store an edge (relationship) between two nodes in the graph.
+   *
+   * @param edge the edge to store
+   * @throws IoException if indexing operation fails
+   */
+  public void storeEdge(GraphEdge edge) {
+    if (!initialized || database == null) {
+      log.warn("ArangoDB service not initialized, skipping edge storage");
+      return;
+    }
+
+    try {
+      String edgeKey = sanitizeKey(edge.getFromKey() + "_to_" + edge.getToKey());
+      log.trace("Storing edge: {} -> {} (type: {})", 
+          edge.getFromKey(), edge.getToKey(), edge.getEdgeType());
+
+      Map<String, Object> edgeData = new HashMap<>(edge.toMap());
       edgeData.put("_key", edgeKey);
-      edgeData.put("_from", VERTICES_COLLECTION + "/" + fromKey);
-      edgeData.put("_to", VERTICES_COLLECTION + "/" + toKey);
+      
+      // Determine source and target collections
+      String fromCollection = determineCollectionFromKey(edge.getFromKey());
+      String toCollection = determineCollectionFromKey(edge.getToKey());
+      
+      edgeData.put("_from", fromCollection + "/" + edge.getFromKey());
+      edgeData.put("_to", toCollection + "/" + edge.getToKey());
 
       database.collection(EDGES_COLLECTION).insertDocument(edgeData);
-      log.debug("Successfully indexed edge: {} -> {}", fromKey, toKey);
+      log.debug("Successfully stored edge: {} -> {}", edge.getFromKey(), edge.getToKey());
     } catch (Exception e) {
-      throw new IoException("Failed to index edge: " + fromKey + " -> " + toKey, e);
+      throw new IoException(
+          "Failed to store edge: " + edge.getFromKey() + " -> " + edge.getToKey(), e);
+    }
+  }
+
+  /**
+   * Store multiple edges in a batch operation.
+   *
+   * @param edges list of edges to store
+   * @throws IoException if batch operation fails
+   */
+  public void storeEdges(List<GraphEdge> edges) {
+    if (!initialized || database == null) {
+      log.warn("ArangoDB service not initialized, skipping batch edge storage");
+      return;
+    }
+
+    log.debug("Storing {} edges in batch", edges.size());
+    for (GraphEdge edge : edges) {
+      storeEdge(edge);
+    }
+  }
+
+  /**
+   * Get the collection name for a given node type.
+   *
+   * @param nodeType the node type
+   * @return collection name
+   */
+  private String getCollectionForNodeType(String nodeType) {
+    return switch (nodeType) {
+      case "entity" -> ENTITIES_COLLECTION;
+      case "operation" -> OPERATIONS_COLLECTION;
+      case "doc_chunk" -> DOC_CHUNKS_COLLECTION;
+      case "example" -> EXAMPLES_COLLECTION;
+      default -> throw new IllegalArgumentException("Unknown node type: " + nodeType);
+    };
+  }
+
+  /**
+   * Determine the collection from a node key prefix.
+   *
+   * @param key the node key
+   * @return collection name
+   */
+  private String determineCollectionFromKey(String key) {
+    if (key.startsWith("entity_")) return ENTITIES_COLLECTION;
+    if (key.startsWith("op_")) return OPERATIONS_COLLECTION;
+    if (key.startsWith("chunk_")) return DOC_CHUNKS_COLLECTION;
+    if (key.startsWith("example_")) return EXAMPLES_COLLECTION;
+    
+    // Default to entities for backward compatibility
+    return ENTITIES_COLLECTION;
+  }
+
+  /**
+   * Sanitize a key to be valid for ArangoDB.
+   *
+   * @param key the key to sanitize
+   * @return sanitized key
+   */
+  private String sanitizeKey(String key) {
+    // Replace invalid characters with underscores
+    return key.replaceAll("[^a-zA-Z0-9_\\-:@\\.]", "_");
+  }
+
+  /**
+   * Clear all graph data from the database. Use with caution!
+   *
+   * @throws IoException if clear operation fails
+   */
+  public void clearAllData() {
+    if (!initialized || database == null) {
+      log.warn("ArangoDB service not initialized, nothing to clear");
+      return;
+    }
+
+    log.warn("Clearing all graph data from ArangoDB");
+    try {
+      database.collection(ENTITIES_COLLECTION).truncate();
+      database.collection(OPERATIONS_COLLECTION).truncate();
+      database.collection(DOC_CHUNKS_COLLECTION).truncate();
+      database.collection(EXAMPLES_COLLECTION).truncate();
+      database.collection(EDGES_COLLECTION).truncate();
+      log.info("Successfully cleared all graph data");
+    } catch (Exception e) {
+      throw new IoException("Failed to clear graph data", e);
     }
   }
 
@@ -154,6 +327,15 @@ public class ArangoDbService {
    */
   public ArangoDatabase getDatabase() {
     return database;
+  }
+
+  /**
+   * Check if the service is initialized and ready to use.
+   *
+   * @return true if initialized, false otherwise
+   */
+  public boolean isInitialized() {
+    return initialized;
   }
 }
 

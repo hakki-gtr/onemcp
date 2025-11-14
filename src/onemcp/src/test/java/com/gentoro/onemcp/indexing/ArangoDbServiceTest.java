@@ -3,9 +3,9 @@ package com.gentoro.onemcp.indexing;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.gentoro.onemcp.exception.IoException;
-import java.util.HashMap;
-import java.util.Map;
+import com.gentoro.onemcp.indexing.graph.GraphEdge;
+import com.gentoro.onemcp.indexing.graph.nodes.EntityNode;
+import java.util.ArrayList;
 import org.apache.commons.configuration2.Configuration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,49 +42,31 @@ class ArangoDbServiceTest {
     when(configuration.getString("arangodb.user", "root")).thenReturn("root");
     when(configuration.getString("arangodb.password", "")).thenReturn("");
     when(configuration.getString("arangodb.database", "onemcp_kb")).thenReturn("test-db");
+    when(configuration.getBoolean("arangodb.enabled", false)).thenReturn(false);
 
-    // Act & Assert - initialization will fail without real ArangoDB, but we verify
-    // that configuration is being read correctly by checking it throws IoException
-    // (which means it tried to connect)
-    try {
-      arangoDbService.initialize();
-      // If we get here, ArangoDB might be available - that's okay for unit test
-    } catch (Exception e) {
-      // Expected - ArangoDB not available or connection failed
-      // This confirms configuration reading is working
-      assertTrue(e instanceof IoException || e.getCause() != null);
-    }
+    // Act - initialization should skip when disabled
+    arangoDbService.initialize();
 
-    // Verify configuration was accessed
-    verify(configuration, atLeastOnce()).getString(eq("arangodb.host"), anyString());
-    verify(configuration, atLeastOnce()).getInteger(eq("arangodb.port"), anyInt());
+    // Assert - service should not be initialized
+    assertFalse(arangoDbService.isInitialized());
   }
 
   @Test
-  void testStoreVertexThrowsWhenNotInitialized() {
+  void testStoreNodeSkipsWhenNotInitialized() {
     // Arrange
-    Map<String, Object> data = new HashMap<>();
-    data.put("content", "test");
+    EntityNode node = new EntityNode("test-key", "Test Entity", "Description", "test-service", new ArrayList<>());
 
-    // Act & Assert
-    IllegalStateException exception =
-        assertThrows(
-            IllegalStateException.class, () -> arangoDbService.storeVertex("test-key", data));
-    assertTrue(exception.getMessage().contains("not initialized"));
+    // Act & Assert - should not throw, just log warning
+    assertDoesNotThrow(() -> arangoDbService.storeNode(node));
   }
 
   @Test
-  void testStoreEdgeThrowsWhenNotInitialized() {
+  void testStoreEdgeSkipsWhenNotInitialized() {
     // Arrange
-    Map<String, Object> data = new HashMap<>();
-    data.put("type", "references");
+    GraphEdge edge = new GraphEdge("from-key", "to-key", GraphEdge.EdgeType.HAS_OPERATION);
 
-    // Act & Assert
-    IllegalStateException exception =
-        assertThrows(
-            IllegalStateException.class,
-            () -> arangoDbService.storeEdge("from-key", "to-key", data));
-    assertTrue(exception.getMessage().contains("not initialized"));
+    // Act & Assert - should not throw, just log warning
+    assertDoesNotThrow(() -> arangoDbService.storeEdge(edge));
   }
 
   @Test

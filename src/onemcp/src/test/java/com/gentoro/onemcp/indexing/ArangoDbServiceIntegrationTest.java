@@ -4,9 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.arangodb.ArangoDatabase;
 import com.gentoro.onemcp.OneMcp;
-import com.gentoro.onemcp.exception.IoException;
-import java.util.HashMap;
-import java.util.Map;
+import com.gentoro.onemcp.indexing.graph.GraphEdge;
+import com.gentoro.onemcp.indexing.graph.nodes.EntityNode;
+import java.util.ArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -96,27 +96,30 @@ class ArangoDbServiceIntegrationTest {
         "ArangoDB must be running locally. Start ArangoDB and try again.");
 
     // Assert
+    assertTrue(arangoDbService.isInitialized());
     assertNotNull(arangoDbService.getDatabase());
   }
 
   @Test
-  void testStoreVertex() {
+  void testStoreNode() {
     // Require ArangoDB to be running
     arangoDbService.initialize();
 
     // Arrange
-    Map<String, Object> vertexData = new HashMap<>();
-    vertexData.put("title", "Test Vertex");
-    vertexData.put("content", "Test content for vertex");
-    String key = "test-vertex-1";
+    EntityNode node = new EntityNode(
+        "test-entity-1",
+        "Test Entity",
+        "Test description",
+        "test-service",
+        new ArrayList<>());
 
     // Act
-    assertDoesNotThrow(() -> arangoDbService.storeVertex(key, vertexData));
+    assertDoesNotThrow(() -> arangoDbService.storeNode(node));
 
     // Assert - verify document exists by querying
     ArangoDatabase db = arangoDbService.getDatabase();
     assertNotNull(db);
-    assertTrue(db.collection("vertices").exists());
+    assertTrue(db.collection("entities").exists());
   }
 
   @Test
@@ -124,23 +127,18 @@ class ArangoDbServiceIntegrationTest {
     // Require ArangoDB to be running
     arangoDbService.initialize();
 
-    // Arrange - create two vertices first
-    Map<String, Object> vertex1Data = new HashMap<>();
-    vertex1Data.put("title", "Vertex 1");
-    arangoDbService.storeVertex("vertex-1", vertex1Data);
-
-    Map<String, Object> vertex2Data = new HashMap<>();
-    vertex2Data.put("title", "Vertex 2");
-    arangoDbService.storeVertex("vertex-2", vertex2Data);
+    // Arrange - create two nodes first
+    EntityNode entity1 = new EntityNode("entity-1", "Entity 1", "Description 1", "test-service", new ArrayList<>());
+    EntityNode entity2 = new EntityNode("entity-2", "Entity 2", "Description 2", "test-service", new ArrayList<>());
+    
+    arangoDbService.storeNode(entity1);
+    arangoDbService.storeNode(entity2);
 
     // Create edge
-    Map<String, Object> edgeData = new HashMap<>();
-    edgeData.put("type", "references");
-    edgeData.put("weight", 1.0);
+    GraphEdge edge = new GraphEdge("entity-1", "entity-2", GraphEdge.EdgeType.RELATES_TO_ENTITY);
 
     // Act
-    assertDoesNotThrow(
-        () -> arangoDbService.storeEdge("vertex-1", "vertex-2", edgeData));
+    assertDoesNotThrow(() -> arangoDbService.storeEdge(edge));
 
     // Assert - verify edge collection exists
     ArangoDatabase db = arangoDbService.getDatabase();
@@ -149,29 +147,34 @@ class ArangoDbServiceIntegrationTest {
   }
 
   @Test
-  void testStoreMultipleVerticesAndEdges() {
+  void testStoreMultipleNodesAndEdges() {
     // Require ArangoDB to be running
     arangoDbService.initialize();
 
-    // Arrange - create multiple vertices
+    // Arrange - create multiple nodes
     for (int i = 1; i <= 5; i++) {
-      Map<String, Object> vertexData = new HashMap<>();
-      vertexData.put("title", "Vertex " + i);
-      vertexData.put("index", i);
-      arangoDbService.storeVertex("vertex-" + i, vertexData);
+      EntityNode node = new EntityNode(
+          "entity-" + i,
+          "Entity " + i,
+          "Description " + i,
+          "test-service",
+          new ArrayList<>());
+      arangoDbService.storeNode(node);
     }
 
     // Create edges forming a chain: 1->2->3->4->5
     for (int i = 1; i < 5; i++) {
-      Map<String, Object> edgeData = new HashMap<>();
-      edgeData.put("type", "next");
-      arangoDbService.storeEdge("vertex-" + i, "vertex-" + (i + 1), edgeData);
+      GraphEdge edge = new GraphEdge(
+          "entity-" + i,
+          "entity-" + (i + 1),
+          GraphEdge.EdgeType.RELATES_TO_ENTITY);
+      arangoDbService.storeEdge(edge);
     }
 
     // Assert - verify collections exist
     ArangoDatabase db = arangoDbService.getDatabase();
     assertNotNull(db);
-    assertTrue(db.collection("vertices").exists());
+    assertTrue(db.collection("entities").exists());
     assertTrue(db.collection("edges").exists());
   }
 
@@ -184,7 +187,10 @@ class ArangoDbServiceIntegrationTest {
     // Assert
     ArangoDatabase db = arangoDbService.getDatabase();
     assertNotNull(db);
-    assertTrue(db.collection("vertices").exists());
+    assertTrue(db.collection("entities").exists());
+    assertTrue(db.collection("operations").exists());
+    assertTrue(db.collection("doc_chunks").exists());
+    assertTrue(db.collection("examples").exists());
     assertTrue(db.collection("edges").exists());
   }
 
@@ -198,36 +204,32 @@ class ArangoDbServiceIntegrationTest {
   }
 
   @Test
-  void testStoreVertexWithDuplicateKeyThrowsException() {
+  void testStoreNodeWithDuplicateKeyThrowsException() {
     // Require ArangoDB to be running
     arangoDbService.initialize();
 
     // Arrange
-    Map<String, Object> vertexData = new HashMap<>();
-    vertexData.put("title", "Duplicate Test");
-    String key = "duplicate-key";
+    EntityNode node = new EntityNode("duplicate-key", "Duplicate Test", "Description", "test-service", new ArrayList<>());
 
     // Act - store first time
-    arangoDbService.storeVertex(key, vertexData);
+    arangoDbService.storeNode(node);
 
     // Act & Assert - storing again should throw exception
-    assertThrows(IoException.class, () -> arangoDbService.storeVertex(key, vertexData));
+    assertThrows(com.gentoro.onemcp.exception.IoException.class, () -> arangoDbService.storeNode(node));
   }
 
   @Test
-  void testStoreEdgeWithNonExistentVertices() {
+  void testStoreEdgeWithNonExistentNodes() {
     // Require ArangoDB to be running
     arangoDbService.initialize();
 
-    // Arrange - create edge referencing non-existent vertices
-    // Note: ArangoDB allows creating edges even if vertices don't exist
+    // Arrange - create edge referencing non-existent nodes
+    // Note: ArangoDB allows creating edges even if nodes don't exist
     // (it doesn't enforce referential integrity by default)
-    Map<String, Object> edgeData = new HashMap<>();
-    edgeData.put("type", "references");
+    GraphEdge edge = new GraphEdge("non-existent-1", "non-existent-2", GraphEdge.EdgeType.RELATES_TO);
 
     // Act - ArangoDB allows this, so it should succeed
-    assertDoesNotThrow(
-        () -> arangoDbService.storeEdge("non-existent-1", "non-existent-2", edgeData));
+    assertDoesNotThrow(() -> arangoDbService.storeEdge(edge));
 
     // Assert - verify edge was created
     ArangoDatabase db = arangoDbService.getDatabase();

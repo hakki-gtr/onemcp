@@ -2,6 +2,7 @@ package com.gentoro.onemcp.context;
 
 import com.gentoro.onemcp.OneMcp;
 import com.gentoro.onemcp.exception.*;
+import com.gentoro.onemcp.indexing.GraphIndexingService;
 import com.gentoro.onemcp.openapi.MarkdownGenerator;
 import com.gentoro.onemcp.openapi.OpenApiLoader;
 import com.gentoro.onemcp.utility.FileUtility;
@@ -42,6 +43,7 @@ public class KnowledgeBase {
   private final List<Service> services = new ArrayList<>();
   private final OneMcp oneMcp;
   private Path handbookLocation = null;
+  private GraphIndexingService graphIndexingService;
 
   /**
    * Create a new knowledge base bound to the provided configuration.
@@ -56,12 +58,14 @@ public class KnowledgeBase {
    * Processes and loads the knowledge base by ingesting Markdown documents and generating resources
    * from OpenAPI definitions.
    *
-   * <p>This method performs two main operations: 1. Invokes {@code loadDocuments()} to retrieve and
-   * cache all Markdown files located in the configured storage directory as {@link
-   * KnowledgeDocument} instances. 2. Executes {@code processOpenApiDefinitions()} to process
-   * OpenAPI YAML files found in a subdirectory named "openapi". It converts these files into
-   * corresponding Markdown resources, ensuring that the knowledge base is populated with generated
-   * content.
+   * <p>This method performs the following operations:
+   *
+   * <ol>
+   *   <li>Processes OpenAPI definitions and generates documentation
+   *   <li>Loads all markdown documents into memory
+   *   <li>Validates the handbook structure
+   *   <li>Builds a graph representation in ArangoDB for advanced retrieval
+   * </ol>
    *
    * @throws IOException if file operations fail or resources cannot be read/written during the
    *     process
@@ -72,6 +76,17 @@ public class KnowledgeBase {
     processOpenApiDefinitions();
     loadDocuments();
     validateHandbookStructure();
+    
+    // Build graph representation in ArangoDB
+    try {
+      log.info("Starting graph indexing of handbook");
+      graphIndexingService = new GraphIndexingService(oneMcp);
+      graphIndexingService.indexKnowledgeBase();
+      log.info("Graph indexing completed successfully");
+    } catch (Exception e) {
+      log.warn("Graph indexing failed, continuing without graph support", e);
+      // Don't fail the entire ingestion if graph indexing fails
+    }
   }
 
   private void validateHandbookStructure() {

@@ -4,6 +4,19 @@ handbook:
 prompt:
   location: classpath:prompts
 
+# ArangoDB configuration for graph-based RAG
+# NOTE: ArangoDB must be running with authentication configured
+# Start ArangoDB: docker run -e ARANGO_ROOT_PASSWORD=test123 -p 8529:8529 -d arangodb:latest
+# Or disable: export ARANGODB_ENABLED=false
+arangodb:
+  enabled: ${env:ARANGODB_ENABLED:-true}
+  host: ${env:ARANGODB_HOST:-localhost}
+  port: ${env:ARANGODB_PORT:-8529}
+  user: ${env:ARANGODB_USER:-root}
+  password: ${env:ARANGODB_PASSWORD:-test123}
+  database: ${env:ARANGODB_DATABASE:-onemcp_kb}
+  clearOnStartup: ${env:ARANGODB_CLEAR_ON_STARTUP:-true}
+
 # Logging levels can be configured here and applied at startup by OneMcp
 logging:
   level:
@@ -39,13 +52,6 @@ http:
       description: |
         OneMCP entry point, express your request using Natural Language.
 
-
-arangodb:
-  host: ${env:ARANGODB_HOST:-localhost}
-  port: ${env:ARANGODB_PORT:-8529}
-  user: ${env:ARANGODB_USER:-root}
-  password: ${env:ARANGODB_PASSWORD:-}
-  database: ${env:ARANGODB_DATABASE:-onemcp_kb}
 
 llm:
   active-profile: gemini-flash
