@@ -8,4 +8,4 @@ By using the enterprise features, you agree to the terms of a separate commercia
 with GenToro QOZB Inc.
 
 To obtain an enterprise license, please contact:
-enterprise@gentoroqozbinc.com
+admin@gentoro.com
