@@ -135,7 +135,7 @@ class ArangoDbServiceIntegrationTest {
     arangoDbService.storeNode(entity2);
 
     // Create edge
-    GraphEdge edge = new GraphEdge("entity-1", "entity-2", GraphEdge.EdgeType.RELATES_TO_ENTITY);
+    GraphEdge edge = new GraphEdge("entity-1", "entity-2", "RELATES_TO_ENTITY");
 
     // Act
     assertDoesNotThrow(() -> arangoDbService.storeEdge(edge));
@@ -167,7 +167,7 @@ class ArangoDbServiceIntegrationTest {
       GraphEdge edge = new GraphEdge(
           "entity-" + i,
           "entity-" + (i + 1),
-          GraphEdge.EdgeType.RELATES_TO_ENTITY);
+          "RELATES_TO_ENTITY");
       arangoDbService.storeEdge(edge);
     }
 
@@ -226,7 +226,7 @@ class ArangoDbServiceIntegrationTest {
     // Arrange - create edge referencing non-existent nodes
     // Note: ArangoDB allows creating edges even if nodes don't exist
     // (it doesn't enforce referential integrity by default)
-    GraphEdge edge = new GraphEdge("non-existent-1", "non-existent-2", GraphEdge.EdgeType.RELATES_TO);
+    GraphEdge edge = new GraphEdge("non-existent-1", "non-existent-2", "RELATES_TO");
 
     // Act - ArangoDB allows this, so it should succeed
     assertDoesNotThrow(() -> arangoDbService.storeEdge(edge));

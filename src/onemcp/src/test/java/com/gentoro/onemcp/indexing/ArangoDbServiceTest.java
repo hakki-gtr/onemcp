@@ -63,7 +63,7 @@ class ArangoDbServiceTest {
   @Test
   void testStoreEdgeSkipsWhenNotInitialized() {
     // Arrange
-    GraphEdge edge = new GraphEdge("from-key", "to-key", GraphEdge.EdgeType.HAS_OPERATION);
+    GraphEdge edge = new GraphEdge("from-key", "to-key", "HAS_OPERATION");
 
     // Act & Assert - should not throw, just log warning
     assertDoesNotThrow(() -> arangoDbService.storeEdge(edge));

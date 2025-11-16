@@ -68,15 +68,15 @@ public class OneMcp {
     com.gentoro.onemcp.logging.LoggingService.applyConfiguration(configuration());
     this.promptRepository = PromptRepositoryFactory.create(this);
 
+    // Initialize LLM client
+    this.llmClient = LlmClientFactory.createProvider(this);
+
     try {
       this.knowledgeBase = new KnowledgeBase(this);
       this.knowledgeBase.ingestHandbook();
     } catch (Exception e) {
       throw new KnowledgeBaseException("Failed to ingest Handbook content", e);
     }
-
-    // COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK
-    // this.llmClient = LlmClientFactory.createProvider(this);
 
     // COMMENTED OUT FOR KNOWLEDGE BASE INGESTION WORK
     // Initialize shared Jetty server and register components

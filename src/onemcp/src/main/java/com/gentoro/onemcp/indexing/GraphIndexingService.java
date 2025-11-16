@@ -6,16 +6,22 @@ import com.gentoro.onemcp.context.KnowledgeDocument;
 import com.gentoro.onemcp.context.Operation;
 import com.gentoro.onemcp.context.Service;
 import com.gentoro.onemcp.indexing.graph.*;
-import com.gentoro.onemcp.indexing.graph.nodes.DocChunkNode;
 import com.gentoro.onemcp.indexing.graph.nodes.EntityNode;
-import com.gentoro.onemcp.indexing.graph.nodes.ExampleNode;
 import com.gentoro.onemcp.indexing.graph.nodes.OperationNode;
+import com.gentoro.onemcp.indexing.graph.nodes.ExampleNode;
+import com.gentoro.onemcp.model.LlmClient;
+import com.gentoro.onemcp.prompt.PromptTemplate;
+import com.gentoro.onemcp.utility.JacksonUtility;
 
 import io.swagger.v3.oas.models.OpenAPI;
-import io.swagger.v3.oas.models.examples.Example;
-import io.swagger.v3.oas.models.media.Content;
-import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.tags.Tag;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -27,7 +33,6 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li>Entities from OpenAPI tags
  *   <li>Operations with signatures, examples, and documentation
- *   <li>Documentation chunks from markdown files
  *   <li>Examples from OpenAPI specifications
  *   <li>Relationships between all these elements
  * </ul>
@@ -40,8 +45,6 @@ public class GraphIndexingService {
 
   private final OneMcp oneMcp;
   private final ArangoDbService arangoDbService;
-  private final DocumentChunker documentChunker;
-  private final ObjectMapper jsonMapper;
   private final String handbookName;
 
   /**
@@ -53,8 +56,6 @@ public class GraphIndexingService {
     this.oneMcp = oneMcp;
     this.handbookName = oneMcp.knowledgeBase().getHandbookName();
     this.arangoDbService = new ArangoDbService(oneMcp, handbookName);
-    this.documentChunker = new DocumentChunker();
-    this.jsonMapper = new ObjectMapper();
   }
 
   /**
@@ -81,16 +82,16 @@ public class GraphIndexingService {
         arangoDbService.clearAllData();
       }
 
-      // Index services and their components
+      // Index services and their components using LLM-based extraction
       List<Service> services = oneMcp.knowledgeBase().services();
-      log.info("Indexing {} services", services.size());
+      log.info("Indexing {} services using LLM-based extraction", services.size());
 
       for (Service service : services) {
-        indexService(service);
+        indexServiceWithLLM(service);
       }
 
-      // Index general documentation
-      indexGeneralDocumentation();
+      // COMMENTED OUT: Index general documentation (doc chunks)
+      // indexGeneralDocumentation();
 
       // Ensure graph exists after indexing (in case it wasn't created during clear)
       arangoDbService.ensureGraphExists();
@@ -103,12 +104,419 @@ public class GraphIndexingService {
   }
 
   /**
-   * Index a single service including its entities, operations, and documentation.
+   * Index a single service using LLM-based extraction of entities and operations.
+   *
+   * @param service the service to index
+   */
+  private void indexServiceWithLLM(Service service) {
+    log.debug("Indexing service with LLM: {}", service.getSlug());
+
+    try {
+      // Check if LLM client is available
+      LlmClient llmClient = oneMcp.llmClient();
+      if (llmClient == null) {
+        log.warn("LLM client not available, falling back to rule-based extraction for service: {}", service.getSlug());
+        indexService(service);
+        return;
+      }
+
+      // Load prompt template
+      PromptTemplate promptTemplate = oneMcp.promptRepository().get("graph-rag-indexing");
+      PromptTemplate.PromptSession session = promptTemplate.newSession();
+
+      // Prepare context variables for the prompt
+      Map<String, Object> context = preparePromptContext(service);
+      
+      // Enable the activation section with context
+      // All sections in the template use the same activation ID "graph-rag-indexing"
+      // Enabling it once will enable all sections with that ID
+      session.enable("graph-rag-indexing", context);
+      
+      // Render messages and verify we have content to send
+      List<LlmClient.Message> messages = session.renderMessages();
+      if (messages.isEmpty()) {
+        log.warn("No messages rendered from prompt template, falling back to rule-based extraction");
+        indexService(service);
+        return;
+      }
+      
+      log.debug("Rendered {} messages from prompt template, calling LLM for service: {}", messages.size(), service.getSlug());
+      
+      // Log prompt to file
+      logLLMPrompt(service.getSlug(), messages);
+      
+      String llmResponse = llmClient.chat(messages, Collections.emptyList(), false, null);
+      
+      // Log response to file
+      logLLMResponse(service.getSlug(), llmResponse);
+
+      // Parse LLM response and extract entities/operations
+      GraphExtractionResult result = parseLLMResponse(llmResponse, service.getSlug());
+      
+      // Index extracted entities
+      for (EntityNode entity : result.entities()) {
+        arangoDbService.storeNode(entity);
+      }
+
+      // Index extracted operations
+      for (OperationNode operation : result.operations()) {
+        arangoDbService.storeNode(operation);
+      }
+
+      // Index extracted examples
+      for (ExampleNode example : result.examples()) {
+        arangoDbService.storeNode(example);
+        
+        // Create edge from operation to example if operationKey is provided
+        // Only create if it doesn't already exist in the relationships list
+        if (example.getOperationKey() != null && !example.getOperationKey().isEmpty()) {
+          // Check if this edge already exists in relationships (check for common example edge types)
+          boolean edgeExists = result.relationships().stream()
+              .anyMatch(edge -> 
+                  edge.getFromKey().equals(example.getOperationKey()) &&
+                  edge.getToKey().equals(example.getKey()) &&
+                  (edge.getEdgeType().equals("HAS_EXAMPLE") || 
+                   edge.getEdgeType().equals("DEMONSTRATES") ||
+                   edge.getEdgeType().equals("ILLUSTRATES")));
+          
+          if (!edgeExists) {
+            GraphEdge exampleEdge = new GraphEdge(
+                example.getOperationKey(),
+                example.getKey(),
+                "HAS_EXAMPLE",
+                new HashMap<>(),
+                "Operation has this example",
+                "strong");
+            arangoDbService.storeEdge(exampleEdge);
+          }
+        }
+      }
+
+      // Index relationships
+      for (GraphEdge edge : result.relationships()) {
+        arangoDbService.storeEdge(edge);
+      }
+
+      log.info(
+          "Indexed service {} with {} entities, {} operations, {} examples, {} relationships (LLM-based)",
+          service.getSlug(),
+          result.entities().size(),
+          result.operations().size(),
+          result.examples().size(),
+          result.relationships().size());
+    } catch (Exception e) {
+      log.error("Failed to index service with LLM: {}, falling back to rule-based extraction", service.getSlug(), e);
+      // Fallback to rule-based extraction
+      indexService(service);
+    }
+  }
+
+  /**
+   * Prepare context variables for the LLM prompt.
+   *
+   * @param service the service to prepare context for
+   * @return map of context variables
+   */
+  private Map<String, Object> preparePromptContext(Service service) {
+    Map<String, Object> context = new HashMap<>();
+    
+    try {
+      // Load instructions.md content
+      List<KnowledgeDocument> instructions = oneMcp.knowledgeBase().findByUriPrefix("kb:///instructions.md");
+      String instructionsContent = instructions.isEmpty() ? "" : instructions.get(0).content();
+      context.put("instructions_content", instructionsContent);
+
+      // Load OpenAPI files
+      List<Map<String, String>> openapiFiles = new ArrayList<>();
+      Path handbookPath = oneMcp.knowledgeBase().handbookPath();
+      Path openapiPath = handbookPath.resolve("openapi");
+      if (Files.exists(openapiPath)) {
+        Files.walk(openapiPath)
+            .filter(Files::isRegularFile)
+            .filter(p -> p.toString().endsWith(".yaml") || p.toString().endsWith(".yml"))
+            .forEach(file -> {
+              try {
+                Map<String, String> fileInfo = new HashMap<>();
+                fileInfo.put("name", file.getFileName().toString());
+                fileInfo.put("content", Files.readString(file));
+                openapiFiles.add(fileInfo);
+              } catch (Exception e) {
+                log.warn("Failed to read OpenAPI file: {}", file, e);
+              }
+            });
+      }
+      context.put("openapi_files", openapiFiles);
+
+      // Prepare service information
+      List<Map<String, Object>> services = new ArrayList<>();
+      Map<String, Object> serviceInfo = new HashMap<>();
+      serviceInfo.put("slug", service.getSlug());
+      
+      // Load service.yaml content
+      try {
+        Path serviceYamlPath = handbookPath.resolve(service.getResourcesUri()).resolve("service.yaml");
+        if (Files.exists(serviceYamlPath)) {
+          serviceInfo.put("config", Files.readString(serviceYamlPath));
+        }
+      } catch (Exception e) {
+        log.debug("Could not load service.yaml for {}", service.getSlug(), e);
+      }
+
+      // Prepare operations with documentation
+      List<Map<String, Object>> operations = new ArrayList<>();
+      for (Operation op : service.getOperations()) {
+        Map<String, Object> opInfo = new HashMap<>();
+        opInfo.put("operation", op.getOperation());
+        opInfo.put("method", op.getMethod());
+        opInfo.put("path", op.getPath());
+        
+        // Load operation documentation
+        try {
+          String docUri = "kb:///services/" + service.getSlug() + "/operations/" + op.getOperation() + ".md";
+          KnowledgeDocument doc = oneMcp.knowledgeBase().getDocument(docUri);
+          opInfo.put("documentation", doc.content());
+        } catch (Exception e) {
+          log.debug("Could not load documentation for operation: {}", op.getOperation(), e);
+          opInfo.put("documentation", "");
+        }
+        operations.add(opInfo);
+      }
+      serviceInfo.put("operations", operations);
+      services.add(serviceInfo);
+      context.put("services", services);
+
+    } catch (Exception e) {
+      log.warn("Error preparing prompt context", e);
+    }
+
+    return context;
+  }
+
+  /**
+   * Parse LLM JSON response and extract entities, operations, and relationships.
+   *
+   * @param llmResponse the LLM response string (should be JSON)
+   * @param serviceSlug the service slug
+   * @return extraction result with entities, operations, and relationships
+   */
+  private GraphExtractionResult parseLLMResponse(String llmResponse, String serviceSlug) {
+    List<EntityNode> entities = new ArrayList<>();
+    List<OperationNode> operations = new ArrayList<>();
+    List<ExampleNode> examples = new ArrayList<>();
+    List<GraphEdge> relationships = new ArrayList<>();
+
+    try {
+      // Extract JSON from response (may be wrapped in markdown code blocks)
+      String jsonStr = llmResponse.trim();
+      if (jsonStr.startsWith("```json")) {
+        jsonStr = jsonStr.substring(7);
+      }
+      if (jsonStr.startsWith("```")) {
+        jsonStr = jsonStr.substring(3);
+      }
+      if (jsonStr.endsWith("```")) {
+        jsonStr = jsonStr.substring(0, jsonStr.length() - 3);
+      }
+      jsonStr = jsonStr.trim();
+
+      // Parse JSON
+      ObjectMapper mapper = JacksonUtility.getJsonMapper();
+      @SuppressWarnings("unchecked")
+      Map<String, Object> result = mapper.readValue(jsonStr, Map.class);
+
+      // Extract entities
+      @SuppressWarnings("unchecked")
+      List<Map<String, Object>> entitiesList = (List<Map<String, Object>>) result.get("entities");
+      if (entitiesList != null) {
+        for (Map<String, Object> entityData : entitiesList) {
+          String key = (String) entityData.get("key");
+          String name = (String) entityData.get("name");
+          String description = (String) entityData.getOrDefault("description", "");
+          @SuppressWarnings("unchecked")
+          List<String> associatedOps = (List<String>) entityData.getOrDefault("associatedOperations", new ArrayList<>());
+          String source = (String) entityData.getOrDefault("source", null);
+          @SuppressWarnings("unchecked")
+          List<String> attributes = (List<String>) entityData.getOrDefault("attributes", null);
+          String domain = (String) entityData.getOrDefault("domain", null);
+          
+          EntityNode entity = new EntityNode(
+              key != null ? key : "entity|" + sanitizeKey(name),
+              name,
+              description,
+              serviceSlug,
+              associatedOps,
+              source,
+              attributes,
+              domain);
+          entities.add(entity);
+        }
+      }
+
+      // Extract operations
+      @SuppressWarnings("unchecked")
+      List<Map<String, Object>> operationsList = (List<Map<String, Object>>) result.get("operations");
+      if (operationsList != null) {
+        for (Map<String, Object> opData : operationsList) {
+          String key = (String) opData.get("key");
+          String operationId = (String) opData.get("operationId");
+          String method = (String) opData.get("method");
+          String path = (String) opData.get("path");
+          String summary = (String) opData.getOrDefault("summary", "");
+          String description = (String) opData.getOrDefault("description", summary);
+          @SuppressWarnings("unchecked")
+          List<String> tags = (List<String>) opData.getOrDefault("tags", new ArrayList<>());
+          String signature = (String) opData.getOrDefault("signature", method + " " + path + " - " + summary);
+          @SuppressWarnings("unchecked")
+          List<String> exampleKeys = (List<String>) opData.getOrDefault("exampleKeys", new ArrayList<>());
+          String documentationUri = (String) opData.getOrDefault("documentationUri", "");
+          String requestSchema = (String) opData.getOrDefault("requestSchema", null);
+          String responseSchema = (String) opData.getOrDefault("responseSchema", null);
+          @SuppressWarnings("unchecked")
+          List<String> operationExamples = (List<String>) opData.getOrDefault("examples", null);
+          String category = (String) opData.getOrDefault("category", null);
+          
+          // Log category extraction for debugging
+          if (category != null) {
+            log.trace("Extracted category '{}' for operation: {}", category, operationId);
+          } else {
+            log.debug("No category found for operation: {}", operationId);
+          }
+
+          OperationNode operation = new OperationNode(
+              key != null ? key : "op|" + sanitizeKey(operationId),
+              operationId,
+              method,
+              path,
+              summary,
+              description,
+              serviceSlug,
+              tags,
+              signature,
+              exampleKeys,
+              documentationUri,
+              requestSchema,
+              responseSchema,
+              operationExamples,
+              category);
+          operations.add(operation);
+        }
+      }
+
+      // Extract examples
+      @SuppressWarnings("unchecked")
+      List<Map<String, Object>> examplesList = (List<Map<String, Object>>) result.get("examples");
+      if (examplesList != null) {
+        for (Map<String, Object> exData : examplesList) {
+          String key = (String) exData.get("key");
+          String name = (String) exData.get("name");
+          String summary = (String) exData.getOrDefault("summary", "");
+          String description = (String) exData.getOrDefault("description", summary);
+          
+          // Handle requestBody and responseBody which might be objects or strings
+          Object requestBodyObj = exData.getOrDefault("requestBody", "");
+          String requestBody = convertToString(requestBodyObj);
+          
+          Object responseBodyObj = exData.getOrDefault("responseBody", "");
+          String responseBody = convertToString(responseBodyObj);
+          
+          // Handle responseStatus which might be a number or string
+          Object responseStatusObj = exData.getOrDefault("responseStatus", "200");
+          String responseStatus = responseStatusObj != null ? responseStatusObj.toString() : "200";
+          
+          String operationKey = (String) exData.get("operationKey");
+          
+          // Generate key if not provided
+          if (key == null && operationKey != null && name != null) {
+            key = "example|" + sanitizeKey(operationKey.replace("op|", "") + "_" + name);
+          } else if (key == null) {
+            log.warn("Example missing key, name, or operationKey, skipping");
+            continue;
+          }
+          
+          ExampleNode example = new ExampleNode(
+              key,
+              name != null ? name : "",
+              summary,
+              description,
+              requestBody,
+              responseBody,
+              responseStatus,
+              operationKey,
+              serviceSlug);
+          examples.add(example);
+        }
+      }
+
+      // Extract relationships
+      @SuppressWarnings("unchecked")
+      List<Map<String, Object>> relationshipsList = (List<Map<String, Object>>) result.get("relationships");
+      if (relationshipsList != null) {
+        for (Map<String, Object> relData : relationshipsList) {
+          String fromKey = (String) relData.get("fromKey");
+          String toKey = (String) relData.get("toKey");
+          String edgeTypeStr = (String) relData.get("edgeType");
+          String description = (String) relData.getOrDefault("description", null);
+          String strength = (String) relData.getOrDefault("strength", null);
+          
+          // Validate that edgeType is provided
+          if (edgeTypeStr == null || edgeTypeStr.trim().isEmpty()) {
+            log.warn("Missing edge type for relationship {} -> {}, skipping", fromKey, toKey);
+            continue;
+          }
+
+          GraphEdge edge = new GraphEdge(fromKey, toKey, edgeTypeStr, new HashMap<>(), description, strength);
+          relationships.add(edge);
+        }
+      }
+
+    } catch (Exception e) {
+      log.error("Failed to parse LLM response, using empty result", e);
+      log.debug("LLM response was: {}", llmResponse);
+    }
+
+    return new GraphExtractionResult(entities, operations, examples, relationships);
+  }
+
+  /**
+   * Convert an object to a string, handling both String and complex objects (like Map).
+   * If the object is a Map or other complex type, serialize it to JSON string.
+   *
+   * @param obj the object to convert
+   * @return string representation
+   */
+  private String convertToString(Object obj) {
+    if (obj == null) {
+      return "";
+    }
+    if (obj instanceof String) {
+      return (String) obj;
+    }
+    // For complex objects (Map, List, etc.), serialize to JSON
+    try {
+      ObjectMapper mapper = JacksonUtility.getJsonMapper();
+      return mapper.writeValueAsString(obj);
+    } catch (Exception e) {
+      log.warn("Failed to serialize object to JSON string, using toString()", e);
+      return obj.toString();
+    }
+  }
+
+  /**
+   * Record to hold extraction results.
+   */
+  private record GraphExtractionResult(
+      List<EntityNode> entities,
+      List<OperationNode> operations,
+      List<ExampleNode> examples,
+      List<GraphEdge> relationships) {}
+
+  /**
+   * Index a single service using rule-based extraction (fallback method).
    *
    * @param service the service to index
    */
   private void indexService(Service service) {
-    log.debug("Indexing service: {}", service.getSlug());
+    log.debug("Indexing service (rule-based): {}", service.getSlug());
 
     try {
       // Load OpenAPI definition
@@ -127,32 +535,17 @@ public class GraphIndexingService {
 
         // Create edges from entities to operations
         for (String tag : opNode.getTags()) {
-          String entityKey = "entity_" + service.getSlug() + "_" + sanitizeKey(tag);
+          String entityKey = "entity|" + sanitizeKey(tag);
           arangoDbService.storeEdge(
-              new GraphEdge(entityKey, opNode.getKey(), GraphEdge.EdgeType.HAS_OPERATION));
+              new GraphEdge(entityKey, opNode.getKey(), "HAS_OPERATION"));
         }
       }
 
-      // Extract and index examples
-      List<ExampleNode> examples = extractExamples(service, openAPI);
-      for (ExampleNode example : examples) {
-        arangoDbService.storeNode(example);
-
-        // Create edge from operation to example
-        arangoDbService.storeEdge(
-            new GraphEdge(
-                example.getOperationKey(), example.getKey(), GraphEdge.EdgeType.HAS_EXAMPLE));
-      }
-
-      // Index operation documentation
-      indexOperationDocumentation(service);
-
       log.debug(
-          "Indexed service {} with {} entities, {} operations, {} examples",
+          "Indexed service {} with {} entities, {} operations (rule-based)",
           service.getSlug(),
           entities.size(),
-          operationNodes.size(),
-          examples.size());
+          operationNodes.size());
     } catch (Exception e) {
       log.error("Failed to index service: {}", service.getSlug(), e);
     }
@@ -174,14 +567,14 @@ public class GraphIndexingService {
     }
 
     for (Tag tag : openAPI.getTags()) {
-      String key = "entity_" + service.getSlug() + "_" + sanitizeKey(tag.getName());
+      String key = "entity|" + sanitizeKey(tag.getName());
       String description = tag.getDescription() != null ? tag.getDescription() : "";
 
       // Find operations associated with this tag
       List<String> associatedOps =
           service.getOperations().stream()
               .filter(op -> op.getOperation() != null)
-              .map(op -> "op_" + service.getSlug() + "_" + sanitizeKey(op.getOperation()))
+              .map(op -> "op|" + sanitizeKey(op.getOperation()))
               .collect(Collectors.toList());
 
       EntityNode entity =
@@ -203,7 +596,7 @@ public class GraphIndexingService {
     List<OperationNode> operationNodes = new ArrayList<>();
 
     for (Operation operation : service.getOperations()) {
-      String key = "op_" + service.getSlug() + "_" + sanitizeKey(operation.getOperation());
+      String key = "op|" + sanitizeKey(operation.getOperation());
       String signature = buildOperationSignature(operation);
 
       // Extract tags from operation
@@ -251,316 +644,81 @@ public class GraphIndexingService {
   }
 
   /**
-   * Extract example nodes from OpenAPI specification.
+   * Log LLM prompt messages to a file.
    *
-   * @param service the service
-   * @param openAPI the OpenAPI specification
-   * @return list of example nodes
-   */
-  private List<ExampleNode> extractExamples(Service service, OpenAPI openAPI) {
-    List<ExampleNode> examples = new ArrayList<>();
-
-    if (openAPI.getPaths() == null) {
-      return examples;
-    }
-
-    // Iterate through paths and operations to find examples
-    openAPI
-        .getPaths()
-        .forEach(
-            (path, pathItem) -> {
-              pathItem
-                  .readOperationsMap()
-                  .forEach(
-                      (method, operation) -> {
-                        if (operation.getOperationId() != null) {
-                          String operationKey =
-                              "op_"
-                                  + service.getSlug()
-                                  + "_"
-                                  + sanitizeKey(operation.getOperationId());
-
-                          // Extract request body examples
-                          if (operation.getRequestBody() != null
-                              && operation.getRequestBody().getContent() != null) {
-                            extractExamplesFromContent(
-                                operation.getRequestBody().getContent(),
-                                operationKey,
-                                service.getSlug(),
-                                "request",
-                                examples);
-                          }
-
-                          // Extract response examples
-                          if (operation.getResponses() != null) {
-                            operation
-                                .getResponses()
-                                .forEach(
-                                    (status, response) ->
-                                        extractExamplesFromResponse(
-                                            response,
-                                            operationKey,
-                                            service.getSlug(),
-                                            status,
-                                            examples));
-                          }
-                        }
-                      });
-            });
-
-    return examples;
-  }
-
-  /**
-   * Extract examples from media type content.
-   *
-   * @param content the content map
-   * @param operationKey the operation key
    * @param serviceSlug the service slug
-   * @param type request or response
-   * @param examples the list to add examples to
+   * @param messages the messages sent to LLM
    */
-  private void extractExamplesFromContent(
-      Content content,
-      String operationKey,
-      String serviceSlug,
-      String type,
-      List<ExampleNode> examples) {
-    if (content == null) return;
-
-    content.forEach(
-        (mediaTypeStr, mediaType) -> {
-          if (mediaType.getExamples() != null) {
-            mediaType
-                .getExamples()
-                .forEach(
-                    (exampleName, example) -> {
-                      String exampleKey =
-                          "example_"
-                              + serviceSlug
-                              + "_"
-                              + sanitizeKey(operationKey + "_" + exampleName);
-
-                      String requestBody = "";
-                      String responseBody = "";
-                      if ("request".equals(type)) {
-                        requestBody = serializeExample(example);
-                      } else {
-                        responseBody = serializeExample(example);
-                      }
-
-                      ExampleNode exampleNode =
-                          new ExampleNode(
-                              exampleKey,
-                              exampleName,
-                              example.getSummary() != null ? example.getSummary() : "",
-                              example.getDescription() != null ? example.getDescription() : "",
-                              requestBody,
-                              responseBody,
-                              type.equals("request") ? "" : "200",
-                              operationKey,
-                              serviceSlug);
-
-                      examples.add(exampleNode);
-                    });
-          }
-        });
+  private void logLLMPrompt(String serviceSlug, List<LlmClient.Message> messages) {
+    try {
+      File logsDir = new File("logs");
+      if (!logsDir.exists()) {
+        logsDir.mkdirs();
+      }
+      
+      File logFile = new File(logsDir, "llm-prompts.log");
+      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+      
+      try (FileWriter writer = new FileWriter(logFile, true)) {
+        writer.write("\n");
+        writer.write("=".repeat(80) + "\n");
+        writer.write(String.format("TIMESTAMP: %s\n", timestamp));
+        writer.write(String.format("SERVICE: %s\n", serviceSlug));
+        writer.write("=".repeat(80) + "\n");
+        writer.write("PROMPT MESSAGES:\n");
+        writer.write("-".repeat(80) + "\n");
+        
+        for (int i = 0; i < messages.size(); i++) {
+          LlmClient.Message msg = messages.get(i);
+          writer.write(String.format("\n[Message %d/%d - Role: %s]\n", i + 1, messages.size(), msg.role()));
+          writer.write("-".repeat(80) + "\n");
+          writer.write(msg.content());
+          writer.write("\n");
+        }
+        
+        writer.write("=".repeat(80) + "\n\n");
+        writer.flush();
+      }
+      
+      log.debug("Logged LLM prompt to file: {}", logFile.getAbsolutePath());
+    } catch (IOException e) {
+      log.warn("Failed to log LLM prompt to file", e);
+    }
   }
 
   /**
-   * Extract examples from API response.
+   * Log LLM response to a file.
    *
-   * @param response the API response
-   * @param operationKey the operation key
    * @param serviceSlug the service slug
-   * @param status the response status
-   * @param examples the list to add examples to
+   * @param response the response from LLM
    */
-  private void extractExamplesFromResponse(
-      ApiResponse response,
-      String operationKey,
-      String serviceSlug,
-      String status,
-      List<ExampleNode> examples) {
-    if (response.getContent() != null) {
-      extractExamplesFromContent(response.getContent(), operationKey, serviceSlug, status, examples);
-    }
-  }
-
-  /**
-   * Serialize an example to JSON string.
-   *
-   * @param example the example
-   * @return JSON string
-   */
-  private String serializeExample(Example example) {
+  private void logLLMResponse(String serviceSlug, String response) {
     try {
-      if (example.getValue() != null) {
-        return jsonMapper.writeValueAsString(example.getValue());
+      File logsDir = new File("logs");
+      if (!logsDir.exists()) {
+        logsDir.mkdirs();
       }
-    } catch (Exception e) {
-      log.warn("Failed to serialize example", e);
-    }
-    return "";
-  }
-
-  /**
-   * Index operation documentation as chunks.
-   *
-   * @param service the service
-   */
-  private void indexOperationDocumentation(Service service) {
-    for (Operation operation : service.getOperations()) {
-      try {
-        String docUri =
-            "kb:///services/" + service.getSlug() + "/operations/" + operation.getOperation() + ".md";
-        KnowledgeDocument doc = oneMcp.knowledgeBase().getDocument(docUri);
-
-        String operationKey = "op_" + service.getSlug() + "_" + sanitizeKey(operation.getOperation());
-
-        // Chunk the documentation
-        List<DocumentChunker.DocumentChunk> chunks =
-            documentChunker.chunkDocument(doc.content(), docUri);
-
-        // Index each chunk
-        for (int i = 0; i < chunks.size(); i++) {
-          DocumentChunker.DocumentChunk chunk = chunks.get(i);
-          String chunkKey =
-              "chunk_"
-                  + service.getSlug()
-                  + "_"
-                  + sanitizeKey(operation.getOperation())
-                  + "_"
-                  + i;
-
-          DocChunkNode chunkNode =
-              new DocChunkNode(
-                  chunkKey,
-                  chunk.getContent(),
-                  chunk.getSourceUri(),
-                  "operation_doc",
-                  chunk.getChunkIndex(),
-                  chunk.getStartOffset(),
-                  chunk.getEndOffset(),
-                  chunk.getTitle(),
-                  operationKey);
-
-          arangoDbService.storeNode(chunkNode);
-
-          // Create edge from operation to documentation chunk
-          arangoDbService.storeEdge(
-              new GraphEdge(operationKey, chunkKey, GraphEdge.EdgeType.HAS_DOCUMENTATION));
-
-          // Create sequential edges between chunks
-          if (i > 0) {
-            String prevChunkKey =
-                "chunk_"
-                    + service.getSlug()
-                    + "_"
-                    + sanitizeKey(operation.getOperation())
-                    + "_"
-                    + (i - 1);
-            arangoDbService.storeEdge(
-                new GraphEdge(prevChunkKey, chunkKey, GraphEdge.EdgeType.FOLLOWS_CHUNK));
-          }
-        }
-      } catch (Exception e) {
-        log.warn("Failed to index documentation for operation: {}", operation.getOperation(), e);
+      
+      File logFile = new File(logsDir, "llm-responses.log");
+      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+      
+      try (FileWriter writer = new FileWriter(logFile, true)) {
+        writer.write("\n");
+        writer.write("=".repeat(80) + "\n");
+        writer.write(String.format("TIMESTAMP: %s\n", timestamp));
+        writer.write(String.format("SERVICE: %s\n", serviceSlug));
+        writer.write("=".repeat(80) + "\n");
+        writer.write("LLM RESPONSE:\n");
+        writer.write("-".repeat(80) + "\n");
+        writer.write(response);
+        writer.write("\n");
+        writer.write("=".repeat(80) + "\n\n");
+        writer.flush();
       }
-    }
-  }
-
-  /**
-   * Index general documentation files (non-operation specific).
-   */
-  private void indexGeneralDocumentation() {
-    log.debug("Indexing general documentation");
-
-    try {
-      // Index instructions.md
-      List<KnowledgeDocument> docs =
-          oneMcp.knowledgeBase().findByUriPrefix("kb:///instructions.md");
-
-      for (KnowledgeDocument doc : docs) {
-        List<DocumentChunker.DocumentChunk> chunks =
-            documentChunker.chunkDocument(doc.content(), doc.uri());
-
-        for (int i = 0; i < chunks.size(); i++) {
-          DocumentChunker.DocumentChunk chunk = chunks.get(i);
-          String chunkKey = "chunk_general_instructions_" + i;
-
-          DocChunkNode chunkNode =
-              new DocChunkNode(
-                  chunkKey,
-                  chunk.getContent(),
-                  chunk.getSourceUri(),
-                  "general_doc",
-                  chunk.getChunkIndex(),
-                  chunk.getStartOffset(),
-                  chunk.getEndOffset(),
-                  chunk.getTitle(),
-                  null);
-
-          arangoDbService.storeNode(chunkNode);
-
-          // Create sequential edges
-          if (i > 0) {
-            String prevChunkKey = "chunk_general_instructions_" + (i - 1);
-            arangoDbService.storeEdge(
-                new GraphEdge(prevChunkKey, chunkKey, GraphEdge.EdgeType.FOLLOWS_CHUNK));
-          }
-        }
-      }
-
-      // Index other documentation in docs/ folder
-      List<KnowledgeDocument> allDocs = oneMcp.knowledgeBase().findByUriPrefix("kb:///docs/");
-      for (KnowledgeDocument doc : allDocs) {
-        indexGeneralDocument(doc);
-      }
-
-    } catch (Exception e) {
-      log.warn("Failed to index general documentation", e);
-    }
-  }
-
-  /**
-   * Index a general documentation file.
-   *
-   * @param doc the document to index
-   */
-  private void indexGeneralDocument(KnowledgeDocument doc) {
-    try {
-      String docId = sanitizeKey(doc.uri().replace("kb:///", "").replace("/", "_"));
-      List<DocumentChunker.DocumentChunk> chunks =
-          documentChunker.chunkDocument(doc.content(), doc.uri());
-
-      for (int i = 0; i < chunks.size(); i++) {
-        DocumentChunker.DocumentChunk chunk = chunks.get(i);
-        String chunkKey = "chunk_" + docId + "_" + i;
-
-        DocChunkNode chunkNode =
-            new DocChunkNode(
-                chunkKey,
-                chunk.getContent(),
-                chunk.getSourceUri(),
-                "general_doc",
-                chunk.getChunkIndex(),
-                chunk.getStartOffset(),
-                chunk.getEndOffset(),
-                chunk.getTitle(),
-                null);
-
-        arangoDbService.storeNode(chunkNode);
-
-        // Create sequential edges
-        if (i > 0) {
-          String prevChunkKey = "chunk_" + docId + "_" + (i - 1);
-          arangoDbService.storeEdge(
-              new GraphEdge(prevChunkKey, chunkKey, GraphEdge.EdgeType.FOLLOWS_CHUNK));
-        }
-      }
-    } catch (Exception e) {
-      log.warn("Failed to index document: {}", doc.uri(), e);
+      
+      log.debug("Logged LLM response to file: {}", logFile.getAbsolutePath());
+    } catch (IOException e) {
+      log.warn("Failed to log LLM response to file", e);
     }
   }
 
@@ -572,7 +730,7 @@ public class GraphIndexingService {
    */
   private String sanitizeKey(String input) {
     if (input == null) return "";
-    return input.replaceAll("[^a-zA-Z0-9_\\-]", "_").toLowerCase();
+    return input.replaceAll("[^a-zA-Z0-9_\\-|]", "_").toLowerCase();
   }
 
   /**
@@ -584,66 +742,4 @@ public class GraphIndexingService {
     }
   }
 
-  // ============================================================================
-  // FUTURE USER FEEDBACK INTEGRATION
-  // ============================================================================
-
-  /**
-   * Placeholder for future user feedback integration.
-   *
-   * <p>When user feedback is collected, it can be indexed as nodes and linked to the relevant
-   * operations, examples, or documentation chunks using the HAS_FEEDBACK edge type.
-   *
-   * <p>Feedback nodes would contain:
-   *
-   * <ul>
-   *   <li>User ID or session ID
-   *   <li>Timestamp
-   *   <li>Feedback type (positive, negative, correction, suggestion)
-   *   <li>Feedback content (text, rating, etc.)
-   *   <li>Context (what the user was doing when providing feedback)
-   * </ul>
-   *
-   * <p>Integration points:
-   *
-   * <ol>
-   *   <li>Create a FeedbackNode class implementing GraphNode
-   *   <li>Add a method to store feedback: storeFeedback(FeedbackNode feedback)
-   *   <li>Create edges linking feedback to related nodes (operations, examples, doc chunks)
-   *   <li>Use feedback to rank and improve retrieval relevance
-   *   <li>Aggregate feedback statistics for quality metrics
-   * </ol>
-   *
-   * <p>Example usage:
-   *
-   * <pre>
-   * FeedbackNode feedback = new FeedbackNode(
-   *     "feedback_12345",
-   *     userId,
-   *     timestamp,
-   *     "positive",
-   *     "This example was very helpful!",
-   *     exampleKey
-   * );
-   * arangoDbService.storeNode(feedback);
-   * arangoDbService.storeEdge(new GraphEdge(
-   *     exampleKey,
-   *     feedback.getKey(),
-   *     GraphEdge.EdgeType.HAS_FEEDBACK
-   * ));
-   * </pre>
-   *
-   * <p>Query patterns for feedback:
-   *
-   * <ul>
-   *   <li>Find all feedback for an operation
-   *   <li>Find operations with most positive feedback
-   *   <li>Find examples that need improvement (negative feedback)
-   *   <li>Track feedback trends over time
-   *   <li>Personalize recommendations based on user feedback history
-   * </ul>
-   *
-   * <p>Note: This documentation serves as a placeholder and design guide for future implementation.
-   */
 }
-

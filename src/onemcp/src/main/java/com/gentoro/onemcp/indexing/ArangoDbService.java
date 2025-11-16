@@ -11,6 +11,7 @@ import com.gentoro.onemcp.exception.IoException;
 import com.gentoro.onemcp.indexing.graph.GraphEdge;
 import com.gentoro.onemcp.indexing.graph.nodes.GraphNode;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -145,27 +146,35 @@ public class ArangoDbService {
    */
   private void createNamedGraph() {
     try {
-      // Always get handbook name from knowledge base to ensure it's current
-      String actualHandbookName;
-      try {
-        actualHandbookName = oneMcp.knowledgeBase().getHandbookName();
-        log.debug("Retrieved handbook name from knowledge base: {}", actualHandbookName);
-        
-        // If still unknown, try to force initialization
-        if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
-          log.warn("Handbook name is unknown, forcing handbook path resolution");
-          oneMcp.knowledgeBase().handbookPath(); // Force initialization
+      // Use the handbook name from constructor parameter first
+      String actualHandbookName = handbookName;
+      
+      // If constructor parameter is null or unknown, try to get it from knowledge base
+      if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
+        try {
           actualHandbookName = oneMcp.knowledgeBase().getHandbookName();
-          log.debug("After forcing initialization, handbook name: {}", actualHandbookName);
+          log.debug("Retrieved handbook name from knowledge base: {}", actualHandbookName);
+          
+          // If still unknown, try to force initialization
+          if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
+            log.debug("Handbook name is unknown, forcing handbook path resolution");
+            Path handbookPath = oneMcp.knowledgeBase().handbookPath(); // Force initialization
+            // Try to extract name from path if getHandbookName still returns unknown
+            actualHandbookName = oneMcp.knowledgeBase().getHandbookName();
+            if ((actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) && handbookPath != null) {
+              // Extract name from path as fallback
+              actualHandbookName = handbookPath.getFileName().toString();
+              log.debug("Extracted handbook name from path: {}", actualHandbookName);
+            }
+          }
+        } catch (Exception e) {
+          log.debug("Could not retrieve handbook name from knowledge base", e);
         }
-        
-        // Fallback if still unknown
-        if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
-          log.warn("Could not determine handbook name, using default");
-          actualHandbookName = "onemcp_handbook";
-        }
-      } catch (Exception e) {
-        log.warn("Could not retrieve handbook name, using default", e);
+      }
+      
+      // Final fallback if still unknown
+      if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
+        log.debug("Could not determine handbook name, using default");
         actualHandbookName = "onemcp_handbook";
       }
       
@@ -185,7 +194,6 @@ public class ArangoDbService {
       // Check if graph already exists
       if (database.graph(graphName).exists()) {
         log.info("Graph '{}' already exists, skipping creation", graphName);
-        logGraphVisualizationInstructions(graphName);
         return;
       }
       
@@ -210,55 +218,10 @@ public class ArangoDbService {
       database.createGraph(graphName, edgeDefinitions);
       log.info("Created named graph '{}' with {} vertex collections and edge collection '{}'", 
           graphName, vertexCollections.length, EDGES_COLLECTION);
-      
-      logGraphVisualizationInstructions(graphName);
-      
     } catch (Exception e) {
       log.warn("Failed to create named graph, continuing without formal graph definition", e);
       log.info("You can still visualize using queries in the Queries tab");
     }
-  }
-  
-  /**
-   * Log instructions for visualizing the graph in ArangoDB UI.
-   *
-   * @param graphName the name of the created graph
-   */
-  private void logGraphVisualizationInstructions(String graphName) {
-    log.info("");
-    log.info("=== TO VISUALIZE GRAPH WITH EDGE LABELS ===");
-    log.info("");
-    log.info("Method 1 - Use Graphs section (RECOMMENDED):");
-    log.info("   1. Go to ArangoDB UI -> Graphs section (left sidebar)");
-    log.info("   2. Click on graph: '{}'", graphName);
-    log.info("   3. Graph viewer will open showing all nodes and edges");
-    log.info("   4. Click Settings (gear icon) in graph viewer");
-    log.info("   5. Scroll to 'Edges' section");
-    log.info("   6. Find 'Edge label attribute' field (or 'Edge labels')");
-    log.info("   7. Try these values in order until labels appear:");
-    log.info("      - name (most common)");
-    log.info("      - label");
-    log.info("      - edgeLabel");
-    log.info("      - edgeType");
-    log.info("   8. Click 'Apply'");
-    log.info("   9. Edge labels will now appear on the arrows!");
-    log.info("");
-    log.info("NOTE: If 'Edge label attribute' field doesn't exist, labels are stored");
-    log.info("      in the 'name' field and should display automatically in newer versions.");
-    log.info("");
-    log.info("Method 2 - Query-based visualization:");
-    log.info("   FOR e IN edges RETURN e");
-    log.info("   Then click 'Graph' view button");
-    log.info("");
-    log.info("=== EDGE TYPES IN YOUR GRAPH ===");
-    log.info("");
-    log.info("Edge types:");
-    log.info("- HAS_OPERATION: Entity -> Operation");
-    log.info("- HAS_EXAMPLE: Operation -> Example");
-    log.info("- HAS_DOCUMENTATION: Operation -> Doc Chunk");
-    log.info("- FOLLOWS_CHUNK: Doc Chunk -> Doc Chunk (sequential)");
-    log.info("");
-    log.info("All edge types are stored in: label, name, edgeLabel, edgeType fields");
   }
 
   /**
@@ -294,9 +257,36 @@ public class ArangoDbService {
       log.trace("Storing node: {} in collection: {}", node.getKey(), collection);
       
       Map<String, Object> data = node.toMap();
-      database.collection(collection).insertDocument(data);
+      // Sanitize the _key field for ArangoDB (replace | with _ and <> with _to_)
+      String originalKey = (String) data.get("_key");
+      String sanitizedKey = null;
+      if (originalKey != null) {
+        sanitizedKey = sanitizeKeyForArangoDB(originalKey);
+        data.put("_key", sanitizedKey);
+        log.trace("Sanitized key: {} -> {}", originalKey, sanitizedKey);
+      }
       
-      log.debug("Successfully stored node: {} (type: {})", node.getKey(), node.getNodeType());
+      // Use upsert to handle duplicate nodes gracefully (insert or replace if exists)
+      try {
+        database.collection(collection).insertDocument(data);
+        log.debug("Successfully stored node: {} (type: {})", node.getKey(), node.getNodeType());
+        // Log category if present for debugging
+        if (data.containsKey("category") && data.get("category") != null) {
+          log.trace("Stored node with category: {} = {}", node.getKey(), data.get("category"));
+        }
+      } catch (com.arangodb.ArangoDBException e) {
+        // If node already exists (unique constraint violated), replace it to ensure all fields (including category) are updated
+        if (e.getErrorNum() == 1210 && sanitizedKey != null) { // 1210 = unique constraint violated
+          log.debug("Node already exists, replacing: {} (type: {})", node.getKey(), node.getNodeType());
+          database.collection(collection).replaceDocument(sanitizedKey, data);
+          // Log category if present for debugging
+          if (data.containsKey("category") && data.get("category") != null) {
+            log.trace("Replaced node with category: {} = {}", node.getKey(), data.get("category"));
+          }
+        } else {
+          throw e;
+        }
+      }
     } catch (Exception e) {
       throw new IoException("Failed to store node: " + node.getKey(), e);
     }
@@ -333,28 +323,39 @@ public class ArangoDbService {
     }
 
     try {
-      String edgeKey = sanitizeKey(edge.getFromKey() + "_to_" + edge.getToKey());
+      // Sanitize keys for ArangoDB (replace | with _ and <> with _to_)
+      String sanitizedFromKey = sanitizeKeyForArangoDB(edge.getFromKey());
+      String sanitizedToKey = sanitizeKeyForArangoDB(edge.getToKey());
+      String edgeKey = sanitizeKeyForArangoDB(sanitizedFromKey + "<>" + sanitizedToKey);
+      
       log.trace("Storing edge: {} -> {} (type: {})", 
           edge.getFromKey(), edge.getToKey(), edge.getEdgeType());
+      log.trace("Sanitized edge keys: {} -> {} (from: {}, to: {})", 
+          edge.getFromKey() + "<>" + edge.getToKey(), edgeKey, sanitizedFromKey, sanitizedToKey);
 
       Map<String, Object> edgeData = new HashMap<>(edge.toMap());
       edgeData.put("_key", edgeKey);
       
-      // Determine source and target collections
-      String fromCollection = determineCollectionFromKey(edge.getFromKey());
-      String toCollection = determineCollectionFromKey(edge.getToKey());
+      // Determine source and target collections (using sanitized keys)
+      String fromCollection = determineCollectionFromKey(sanitizedFromKey);
+      String toCollection = determineCollectionFromKey(sanitizedToKey);
       
-      edgeData.put("_from", fromCollection + "/" + edge.getFromKey());
-      edgeData.put("_to", toCollection + "/" + edge.getToKey());
-      
-      // Add label fields for ArangoDB UI graph visualization
-      // Keep only essential fields: name (most common), label (alternative), edgeType (already from toMap)
-      String edgeTypeName = edge.getEdgeType().name();
-      edgeData.put("name", edgeTypeName);  // Primary field - ArangoDB UI often uses this
-      edgeData.put("label", edgeTypeName);  // Alternative field for UI
+      edgeData.put("_from", fromCollection + "/" + sanitizedFromKey);
+      edgeData.put("_to", toCollection + "/" + sanitizedToKey);
 
-      database.collection(EDGES_COLLECTION).insertDocument(edgeData);
-      log.debug("Successfully stored edge: {} -> {}", edge.getFromKey(), edge.getToKey());
+      // Use upsert to handle duplicate edges gracefully (insert or update if exists)
+      try {
+        database.collection(EDGES_COLLECTION).insertDocument(edgeData);
+        log.debug("Successfully stored edge: {} -> {}", edge.getFromKey(), edge.getToKey());
+      } catch (com.arangodb.ArangoDBException e) {
+        // If edge already exists (unique constraint violation), update it instead
+        if (e.getErrorNum() == 1210) { // 1210 = unique constraint violated
+          log.debug("Edge already exists, updating: {} -> {}", edge.getFromKey(), edge.getToKey());
+          database.collection(EDGES_COLLECTION).updateDocument(edgeKey, edgeData);
+        } else {
+          throw e;
+        }
+      }
     } catch (Exception e) {
       throw new IoException(
           "Failed to store edge: " + edge.getFromKey() + " -> " + edge.getToKey(), e);
@@ -402,24 +403,41 @@ public class ArangoDbService {
    * @return collection name
    */
   private String determineCollectionFromKey(String key) {
-    if (key.startsWith("entity_")) return ENTITIES_COLLECTION;
-    if (key.startsWith("op_")) return OPERATIONS_COLLECTION;
-    if (key.startsWith("chunk_")) return DOC_CHUNKS_COLLECTION;
-    if (key.startsWith("example_")) return EXAMPLES_COLLECTION;
+    // Handle both formats: entity|... and entity_... (after sanitization)
+    if (key.startsWith("entity|") || key.startsWith("entity_")) return ENTITIES_COLLECTION;
+    if (key.startsWith("op|") || key.startsWith("op_")) return OPERATIONS_COLLECTION;
+    if (key.startsWith("chunk|") || key.startsWith("chunk_")) return DOC_CHUNKS_COLLECTION;
+    if (key.startsWith("example|") || key.startsWith("example_")) return EXAMPLES_COLLECTION;
     
     // Default to entities for backward compatibility
     return ENTITIES_COLLECTION;
   }
 
   /**
-   * Sanitize a key to be valid for ArangoDB.
+   * Sanitize a key to be valid for ArangoDB document keys.
+   * ArangoDB allows: a-z, A-Z, 0-9, _, -, :, @, .
+   * This method converts our internal format (with | and <>) to ArangoDB-compatible format.
+   *
+   * @param key the key to sanitize (may contain | and <>)
+   * @return sanitized key compatible with ArangoDB
+   */
+  private String sanitizeKeyForArangoDB(String key) {
+    if (key == null) return "";
+    // Replace | with _ and <> with _to_
+    String sanitized = key.replace("|", "_").replace("<>", "_to_");
+    // Remove any other invalid characters
+    return sanitized.replaceAll("[^a-zA-Z0-9_\\-:@\\.]", "_");
+  }
+
+  /**
+   * Sanitize a key to be valid for ArangoDB (legacy method, kept for compatibility).
    *
    * @param key the key to sanitize
    * @return sanitized key
    */
   private String sanitizeKey(String key) {
-    // Replace invalid characters with underscores
-    return key.replaceAll("[^a-zA-Z0-9_\\-:@\\.]", "_");
+    // Replace invalid characters with underscores, but keep pipe (|) and angle brackets (<>) for separators
+    return key.replaceAll("[^a-zA-Z0-9_\\-:@\\.|<>]", "_");
   }
 
   /**

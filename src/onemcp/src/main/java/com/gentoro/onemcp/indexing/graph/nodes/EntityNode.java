@@ -16,6 +16,9 @@ public class EntityNode implements GraphNode {
   private final String description;
   private final String serviceSlug;
   private final List<String> associatedOperations;
+  private final String source;
+  private final List<String> attributes;
+  private final String domain;
 
   public EntityNode(
       String key,
@@ -23,11 +26,26 @@ public class EntityNode implements GraphNode {
       String description,
       String serviceSlug,
       List<String> associatedOperations) {
+    this(key, name, description, serviceSlug, associatedOperations, null, null, null);
+  }
+
+  public EntityNode(
+      String key,
+      String name,
+      String description,
+      String serviceSlug,
+      List<String> associatedOperations,
+      String source,
+      List<String> attributes,
+      String domain) {
     this.key = key;
     this.name = name;
     this.description = description;
     this.serviceSlug = serviceSlug;
     this.associatedOperations = associatedOperations;
+    this.source = source;
+    this.attributes = attributes;
+    this.domain = domain;
   }
 
   @Override
@@ -56,6 +74,18 @@ public class EntityNode implements GraphNode {
     return associatedOperations;
   }
 
+  public String getSource() {
+    return source;
+  }
+
+  public List<String> getAttributes() {
+    return attributes;
+  }
+
+  public String getDomain() {
+    return domain;
+  }
+
   @Override
   public Map<String, Object> toMap() {
     Map<String, Object> map = new HashMap<>();
@@ -66,6 +96,9 @@ public class EntityNode implements GraphNode {
     map.put("description", description);
     map.put("serviceSlug", serviceSlug);
     map.put("associatedOperations", associatedOperations);
+    if (source != null) map.put("source", source);
+    if (attributes != null) map.put("attributes", attributes);
+    if (domain != null) map.put("domain", domain);
     return map;
   }
 }

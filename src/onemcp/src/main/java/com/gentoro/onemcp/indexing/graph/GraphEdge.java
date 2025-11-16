@@ -6,25 +6,39 @@ import java.util.Map;
 /**
  * Represents a directed edge (relationship) between two nodes in the knowledge graph.
  *
- * <p>Edges connect nodes and define semantic relationships such as "HAS_OPERATION",
- * "HAS_DOCUMENTATION", "RELATES_TO", etc.
+ * <p>Edges connect nodes and define semantic relationships. Edge types are flexible strings
+ * that can represent domain-specific relationships such as "HAS_OPERATION", "CONTAINS",
+ * "PRECEDES", "DEPENDS_ON", etc. The system allows any descriptive edge type name to
+ * support generic services with domain-specific relationship semantics.
  */
 public class GraphEdge {
   private final String fromKey;
   private final String toKey;
-  private final EdgeType edgeType;
+  private final String edgeType;
   private final Map<String, Object> properties;
+  private final String description;
+  private final String strength;
 
-  public GraphEdge(String fromKey, String toKey, EdgeType edgeType) {
-    this(fromKey, toKey, edgeType, new HashMap<>());
+  public GraphEdge(String fromKey, String toKey, String edgeType) {
+    this(fromKey, toKey, edgeType, new HashMap<>(), null, null);
   }
 
   public GraphEdge(
-      String fromKey, String toKey, EdgeType edgeType, Map<String, Object> properties) {
+      String fromKey, String toKey, String edgeType, Map<String, Object> properties) {
+    this(fromKey, toKey, edgeType, properties, null, null);
+  }
+
+  public GraphEdge(
+      String fromKey, String toKey, String edgeType, Map<String, Object> properties, String description, String strength) {
+    if (edgeType == null || edgeType.trim().isEmpty()) {
+      throw new IllegalArgumentException("Edge type cannot be null or empty");
+    }
     this.fromKey = fromKey;
     this.toKey = toKey;
-    this.edgeType = edgeType;
-    this.properties = properties;
+    this.edgeType = edgeType.trim().toUpperCase();
+    this.properties = properties != null ? properties : new HashMap<>();
+    this.description = description;
+    this.strength = strength;
   }
 
   public String getFromKey() {
@@ -35,12 +49,20 @@ public class GraphEdge {
     return toKey;
   }
 
-  public EdgeType getEdgeType() {
+  public String getEdgeType() {
     return edgeType;
   }
 
   public Map<String, Object> getProperties() {
     return properties;
+  }
+
+  public String getDescription() {
+    return description;
+  }
+
+  public String getStrength() {
+    return strength;
   }
 
   /**
@@ -50,51 +72,10 @@ public class GraphEdge {
    */
   public Map<String, Object> toMap() {
     Map<String, Object> map = new HashMap<>(properties);
-    map.put("edgeType", edgeType.name());
+    map.put("edgeType", edgeType);
+    if (description != null) map.put("description", description);
+    if (strength != null) map.put("strength", strength);
     return map;
-  }
-
-  /**
-   * Types of relationships between nodes in the knowledge graph.
-   *
-   * <p>These edge types define the semantic relationships that connect different types of nodes.
-   */
-  public enum EdgeType {
-    /** Entity has an operation */
-    HAS_OPERATION,
-
-    /** Operation has an example */
-    HAS_EXAMPLE,
-
-    /** Operation or entity has documentation chunk */
-    HAS_DOCUMENTATION,
-
-    /** Documentation chunk follows another chunk (sequential) */
-    FOLLOWS_CHUNK,
-
-    /** Documentation chunk is part of a parent document/section */
-    PART_OF,
-
-    /** Operation is related to another operation (similar functionality) */
-    RELATES_TO,
-
-    /** Entity relates to another entity */
-    RELATES_TO_ENTITY,
-
-    /** Example demonstrates an operation */
-    DEMONSTRATES,
-
-    /** Documentation chunk describes an entity or operation */
-    DESCRIBES,
-
-    /** Operation depends on or references another operation */
-    DEPENDS_ON,
-
-    /**
-     * User feedback edge (future implementation). Links user feedback to operations, examples, or
-     * doc chunks.
-     */
-    HAS_FEEDBACK
   }
 }
 

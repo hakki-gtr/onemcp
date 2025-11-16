@@ -22,6 +22,10 @@ public class OperationNode implements GraphNode {
   private final String signature;
   private final List<String> exampleKeys;
   private final String documentationUri;
+  private final String requestSchema;
+  private final String responseSchema;
+  private final List<String> examples;
+  private final String category;
 
   public OperationNode(
       String key,
@@ -35,6 +39,43 @@ public class OperationNode implements GraphNode {
       String signature,
       List<String> exampleKeys,
       String documentationUri) {
+    this(key, operationId, method, path, summary, description, serviceSlug, tags, signature, exampleKeys, documentationUri, null, null, null, null);
+  }
+
+  public OperationNode(
+      String key,
+      String operationId,
+      String method,
+      String path,
+      String summary,
+      String description,
+      String serviceSlug,
+      List<String> tags,
+      String signature,
+      List<String> exampleKeys,
+      String documentationUri,
+      String requestSchema,
+      String responseSchema,
+      List<String> examples) {
+    this(key, operationId, method, path, summary, description, serviceSlug, tags, signature, exampleKeys, documentationUri, requestSchema, responseSchema, examples, null);
+  }
+
+  public OperationNode(
+      String key,
+      String operationId,
+      String method,
+      String path,
+      String summary,
+      String description,
+      String serviceSlug,
+      List<String> tags,
+      String signature,
+      List<String> exampleKeys,
+      String documentationUri,
+      String requestSchema,
+      String responseSchema,
+      List<String> examples,
+      String category) {
     this.key = key;
     this.operationId = operationId;
     this.method = method;
@@ -46,6 +87,10 @@ public class OperationNode implements GraphNode {
     this.signature = signature;
     this.exampleKeys = exampleKeys;
     this.documentationUri = documentationUri;
+    this.requestSchema = requestSchema;
+    this.responseSchema = responseSchema;
+    this.examples = examples;
+    this.category = category;
   }
 
   @Override
@@ -98,6 +143,22 @@ public class OperationNode implements GraphNode {
     return documentationUri;
   }
 
+  public String getRequestSchema() {
+    return requestSchema;
+  }
+
+  public String getResponseSchema() {
+    return responseSchema;
+  }
+
+  public List<String> getExamples() {
+    return examples;
+  }
+
+  public String getCategory() {
+    return category;
+  }
+
   @Override
   public Map<String, Object> toMap() {
     Map<String, Object> map = new HashMap<>();
@@ -117,6 +178,10 @@ public class OperationNode implements GraphNode {
     map.put("signature", signature);
     map.put("exampleKeys", exampleKeys);
     map.put("documentationUri", documentationUri);
+    if (requestSchema != null) map.put("requestSchema", requestSchema);
+    if (responseSchema != null) map.put("responseSchema", responseSchema);
+    if (examples != null) map.put("examples", examples);
+    if (category != null) map.put("category", category);
     return map;
   }
 }

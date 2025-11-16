@@ -492,7 +492,23 @@ public class KnowledgeBase {
         }
 
         handbookLocation = tempDir;
+        
+        // Extract handbook name from the base path (before copying to temp)
+        // Use the last segment of the base path as the handbook name
+        String[] pathSegments = base.split("/");
+        if (pathSegments.length > 0) {
+          handbookName = pathSegments[pathSegments.length - 1];
+          // If empty or just whitespace, use temp dir name as fallback
+          if (handbookName == null || handbookName.isBlank()) {
+            handbookName = tempDir.getFileName().toString();
+          }
+        } else {
+          // Fallback to temp dir name
+          handbookName = tempDir.getFileName().toString();
+        }
+        
         log.trace("Assigned handbook location: {}", handbookLocation);
+        log.trace("Handbook name (classpath): {}", handbookName);
         return tempDir;
       } catch (URISyntaxException | IOException ex) {
         throw new KnowledgeBaseException(
