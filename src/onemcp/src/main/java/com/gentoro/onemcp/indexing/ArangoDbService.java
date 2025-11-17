@@ -323,15 +323,31 @@ public class ArangoDbService {
     }
 
     try {
+      // Early validation: reject edges with invalid key formats
+      String fromKey = edge.getFromKey();
+      String toKey = edge.getToKey();
+      
+      if (fromKey == null || toKey == null || fromKey.isEmpty() || toKey.isEmpty()) {
+        log.warn("Skipping edge with null/empty keys: {} -> {}", fromKey, toKey);
+        return;
+      }
+      
+      // Reject generic type names that aren't valid node keys
+      if (!isValidNodeKey(toKey) || !isValidNodeKey(fromKey)) {
+        log.warn("Skipping edge with invalid key format (generic type?): {} -> {} (type: {})", 
+            fromKey, toKey, edge.getEdgeType());
+        return;
+      }
+      
       // Sanitize keys for ArangoDB (replace | with _ and <> with _to_)
-      String sanitizedFromKey = sanitizeKeyForArangoDB(edge.getFromKey());
-      String sanitizedToKey = sanitizeKeyForArangoDB(edge.getToKey());
+      String sanitizedFromKey = sanitizeKeyForArangoDB(fromKey);
+      String sanitizedToKey = sanitizeKeyForArangoDB(toKey);
       String edgeKey = sanitizeKeyForArangoDB(sanitizedFromKey + "<>" + sanitizedToKey);
       
       log.trace("Storing edge: {} -> {} (type: {})", 
-          edge.getFromKey(), edge.getToKey(), edge.getEdgeType());
+          fromKey, toKey, edge.getEdgeType());
       log.trace("Sanitized edge keys: {} -> {} (from: {}, to: {})", 
-          edge.getFromKey() + "<>" + edge.getToKey(), edgeKey, sanitizedFromKey, sanitizedToKey);
+          fromKey + "<>" + toKey, edgeKey, sanitizedFromKey, sanitizedToKey);
 
       Map<String, Object> edgeData = new HashMap<>(edge.toMap());
       edgeData.put("_key", edgeKey);
@@ -429,6 +445,25 @@ public class ArangoDbService {
       case "field" -> FIELDS_COLLECTION;
       default -> throw new IllegalArgumentException("Unknown node type: " + nodeType);
     };
+  }
+
+  /**
+   * Validate that a key matches the expected node key format.
+   * Valid formats: entity|..., op|..., field|..., example|...
+   *
+   * @param key the key to validate
+   * @return true if valid, false otherwise
+   */
+  private boolean isValidNodeKey(String key) {
+    if (key == null || key.isEmpty()) {
+      return false;
+    }
+    // Check for valid prefixes (before sanitization)
+    return key.startsWith("entity|") || key.startsWith("op|") || 
+           key.startsWith("field|") || key.startsWith("example|") ||
+           // Also check sanitized format (after | -> _ replacement)
+           key.startsWith("entity_") || key.startsWith("op_") ||
+           key.startsWith("field_") || key.startsWith("example_");
   }
 
   /**

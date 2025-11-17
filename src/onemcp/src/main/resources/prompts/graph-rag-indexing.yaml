@@ -157,9 +157,12 @@ activations:
       **Patterns:**
       - **Entity → Operation**: `HAS_OPERATION`, `PROVIDES`, `MANAGES`, `QUERIES`, `MODIFIES`, `CREATES`, `DELETES`
       - **Operation → Operation**: `RELATES_TO`, `DEPENDS_ON`, `PRECEDES`, `FOLLOWS`, `COMPLEMENTS`, `EXTENDS`
-      - **Entity → Entity**: `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, `DEPENDS_ON`, `AGGREGATES`, `COMPOSES`
+      - **Entity → Entity**: `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, `DEPENDS_ON`, `AGGREGATES`, `COMPOSES`, `WRAPS`, `EMBEDS`
       - **Entity → Field**: `HAS_FIELD` (REQUIRED for all entity-field relationships)
       - **Operation → Example**: `HAS_EXAMPLE`, `DEMONSTRATES`, `ILLUSTRATES`
+      - **Operation → Entity (Response)**: `RETURNS`, `EMITS`, `EXPECTS_INPUT`, `USES`
+      - **Operation → Entity (Error)**: `CAN_RETURN`, `MAY_RETURN`, `RETURNS_ON_ERROR` (for error response schemas)
+      - **Service → Entity (Utility)**: `PROVIDES_ENTITY`, `HANDLES_ERRORS` (for error/utility schemas)
       
       **Semantic Analysis:** Infer relationships from descriptions, examples, workflows, hierarchies, domain correlations, and implicit dependencies.
       
@@ -174,7 +177,30 @@ activations:
       }
       ```
       
+      **CRITICAL:** `fromKey` and `toKey` MUST reference actual nodes in your output. Never use generic types like "object", "string", "array", or schema type names. If a response is a generic object, either create an entity node for it (e.g., `entity|HealthStatus`) or omit the edge. All keys must match the format `entity|{name}`, `op|{id}`, `field|{entity}_{field}`, or `example|{op}_{name}`.
+      
       **Edge Type Rules:** Keep concise (1-3 words), use description for details, avoid verbose names (e.g., use `TRACKS_OVER_TIME` not `PRICE_AND_AVAILABILITY_TRACKED_OVER_TIME_PERIOD_AND_INTERVAL_FOR_BUSINESS`).
+
+      ## 6. Graph Connectivity Requirements
+      
+      The output must be a single component rooted at the API/service. **Every node must be reachable from the service root.**
+      
+      1. **Service Root:** Emit `entity|{serviceSlug}Service`; connect it to every op (`HAS_OPERATION`) and business entity (`PROVIDES_ENTITY`).
+      2. **Operation Contracts:** Link each op to every schema it reads/writes using `EXPECTS_INPUT`, `RETURNS`, `EMITS`, or `USES`. Infer edges when documentation is quiet.
+      3. **Entity Composition:** When entities wrap/contain others (e.g., `FieldsResponse`→`FieldDefinition`, `QueryResponse`→`Metadata`), add `CONTAINS`/`WRAPS`/`EMBEDS` bridges.
+      4. **Field Reachability:** Only emit field nodes after their entity is connected to the service root; preserve the path `Service → Entity → Field`.
+      5. **Error/Utility Response Schemas (CRITICAL):** 
+         - Error response entities (e.g., `ErrorResponse`, `ErrorDetails`, `ApiError`, `ValidationError`) MUST connect to ALL operations via `CAN_RETURN`, `MAY_RETURN`, or `RETURNS_ON_ERROR` edges.
+         - Also connect error response entities to the service root via `PROVIDES_ENTITY` or `HANDLES_ERRORS`.
+         - If error responses contain nested entities (e.g., `ErrorResponse`→`ErrorDetails`), ensure both are connected.
+      6. **Shared/Utility Schemas:** Pagination metadata, common headers, reusable DTOs, and other utility schemas must connect to:
+         - All operations that use them (`USES`, `EXPECTS_INPUT`, `RETURNS`)
+         - The service root (`PROVIDES_ENTITY`)
+         - Parent entities that embed them (`CONTAINS`, `WRAPS`)
+      7. **Validation Check:** Before finalizing output, verify every entity has at least one incoming or outgoing edge connecting it to the service root (directly or via operations/other entities).
+
+      
+      Reject and retry any extraction that leaves a node unreachable from the service root.
 
       ---
 
@@ -205,8 +231,9 @@ activations:
       3. **Fields:** MUST create Field nodes (3-5+ per entity) with `HAS_FIELD` edges from entities
       4. **Relationships:** Create for entity→fields (REQUIRED), entity→operations, operation→operation, entity→entity, operation→examples. Extract implicit relationships via semantic analysis.
       5. **Edge Types:** Domain-appropriate, concise (1-3 words), UPPER_SNAKE_CASE
-      6. **Consistency:** All keys must reference existing nodes
+      6. **Consistency:** All keys must reference existing nodes. `fromKey`/`toKey` in relationships MUST match keys in entities/operations/examples/fields arrays. Never use generic type names.
       7. **Semantic Depth:** Analyze meaning, context, and implicit connections
+      8. **Validation:** Before outputting, verify every `fromKey` and `toKey` in relationships exists in your entities/operations/examples/fields arrays
       
       ---
       
