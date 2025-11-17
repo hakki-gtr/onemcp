@@ -147,6 +147,19 @@
             <artifactId>arangodb-java-driver</artifactId>
             <version>7.23.0</version>
         </dependency>
+        <!-- Netty native DNS resolver for macOS (fixes DNS resolution warning on macOS) -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver-dns-native-macos</artifactId>
+            <version>4.1.104.Final</version>
+            <classifier>osx-aarch_64</classifier>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver-dns-native-macos</artifactId>
+            <version>4.1.104.Final</version>
+            <classifier>osx-x86_64</classifier>
+        </dependency>
     </dependencies>
 
     <build>

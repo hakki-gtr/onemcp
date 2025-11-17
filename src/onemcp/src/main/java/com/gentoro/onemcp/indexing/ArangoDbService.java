@@ -22,8 +22,8 @@ import java.util.Map;
  * ArangoDB service for indexing knowledge base data in graph format.
  *
  * <p>This service provides features for indexing handbook data as a graph with vertices (nodes) and
- * edges (relationships) in ArangoDB. It supports multiple node types (entities, operations, doc
- * chunks, examples) and various relationship types.
+ * edges (relationships) in ArangoDB. It supports multiple node types (entities, operations,
+ * examples) and various relationship types.
  *
  * <p>The graph structure enables semantic querying and retrieval based on relationships between
  * different knowledge base elements.
@@ -37,7 +37,6 @@ public class ArangoDbService {
   // Collection names for different node types
   private static final String ENTITIES_COLLECTION = "entities";
   private static final String OPERATIONS_COLLECTION = "operations";
-  private static final String DOC_CHUNKS_COLLECTION = "doc_chunks";
   private static final String EXAMPLES_COLLECTION = "examples";
   
   // Edge collections for different relationship types
@@ -100,7 +99,6 @@ public class ArangoDbService {
       // Create document collections for different node types
       createCollectionIfNotExists(ENTITIES_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(OPERATIONS_COLLECTION, CollectionType.DOCUMENT);
-      createCollectionIfNotExists(DOC_CHUNKS_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(EXAMPLES_COLLECTION, CollectionType.DOCUMENT);
 
       // Create edge collection for relationships
@@ -141,7 +139,7 @@ public class ArangoDbService {
    * Create a named graph for visualization in ArangoDB UI.
    *
    * <p>Creates a General Graph that includes all vertex collections (entities, operations,
-   * doc_chunks, examples) and the edges collection. This allows visualization in the Graphs
+   * examples) and the edges collection. This allows visualization in the Graphs
    * section of ArangoDB UI with proper edge label support.
    */
   private void createNamedGraph() {
@@ -201,7 +199,6 @@ public class ArangoDbService {
       String[] vertexCollections = new String[] {
           ENTITIES_COLLECTION,
           OPERATIONS_COLLECTION,
-          DOC_CHUNKS_COLLECTION,
           EXAMPLES_COLLECTION
       };
       
@@ -390,7 +387,6 @@ public class ArangoDbService {
     return switch (nodeType) {
       case "entity" -> ENTITIES_COLLECTION;
       case "operation" -> OPERATIONS_COLLECTION;
-      case "doc_chunk" -> DOC_CHUNKS_COLLECTION;
       case "example" -> EXAMPLES_COLLECTION;
       default -> throw new IllegalArgumentException("Unknown node type: " + nodeType);
     };
@@ -406,7 +402,6 @@ public class ArangoDbService {
     // Handle both formats: entity|... and entity_... (after sanitization)
     if (key.startsWith("entity|") || key.startsWith("entity_")) return ENTITIES_COLLECTION;
     if (key.startsWith("op|") || key.startsWith("op_")) return OPERATIONS_COLLECTION;
-    if (key.startsWith("chunk|") || key.startsWith("chunk_")) return DOC_CHUNKS_COLLECTION;
     if (key.startsWith("example|") || key.startsWith("example_")) return EXAMPLES_COLLECTION;
     
     // Default to entities for backward compatibility
@@ -478,7 +473,6 @@ public class ArangoDbService {
       // Clear all collections
       database.collection(ENTITIES_COLLECTION).truncate();
       database.collection(OPERATIONS_COLLECTION).truncate();
-      database.collection(DOC_CHUNKS_COLLECTION).truncate();
       database.collection(EXAMPLES_COLLECTION).truncate();
       database.collection(EDGES_COLLECTION).truncate();
       

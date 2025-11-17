@@ -189,7 +189,6 @@ class ArangoDbServiceIntegrationTest {
     assertNotNull(db);
     assertTrue(db.collection("entities").exists());
     assertTrue(db.collection("operations").exists());
-    assertTrue(db.collection("doc_chunks").exists());
     assertTrue(db.collection("examples").exists());
     assertTrue(db.collection("edges").exists());
   }

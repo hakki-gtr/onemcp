@@ -17,7 +17,7 @@ public interface GraphNode {
   String getKey();
 
   /**
-   * Get the node type identifier (e.g., "entity", "operation", "doc_chunk", "example").
+   * Get the node type identifier (e.g., "entity", "operation", "example").
    *
    * @return node type string
    */
