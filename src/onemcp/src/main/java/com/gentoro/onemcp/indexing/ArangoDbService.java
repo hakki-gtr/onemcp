@@ -470,13 +470,8 @@ public class ArangoDbService {
 
     log.warn("Clearing all graph data from ArangoDB");
     try {
-      // Clear all collections
-      database.collection(ENTITIES_COLLECTION).truncate();
-      database.collection(OPERATIONS_COLLECTION).truncate();
-      database.collection(EXAMPLES_COLLECTION).truncate();
-      database.collection(EDGES_COLLECTION).truncate();
-      
-      // Drop all graphs to ensure clean state
+      // IMPORTANT: Drop all graphs FIRST before dropping collections
+      // Collections that are part of a graph cannot be dropped directly
       try {
         Collection<com.arangodb.entity.GraphEntity> graphs = database.getGraphs();
         for (com.arangodb.entity.GraphEntity graphEntity : graphs) {
@@ -488,8 +483,34 @@ public class ArangoDbService {
         log.debug("Could not list or drop graphs (may not exist)", e);
       }
       
+      // Now drop all collections (except system collections)
+      Collection<com.arangodb.entity.CollectionEntity> collections = database.getCollections();
+      for (com.arangodb.entity.CollectionEntity collectionEntity : collections) {
+        String collectionName = collectionEntity.getName();
+        
+        // Skip system collections (they start with underscore)
+        if (collectionName.startsWith("_")) {
+          continue;
+        }
+        
+        log.info("Dropping collection: {}", collectionName);
+        try {
+          database.collection(collectionName).drop();
+        } catch (Exception e) {
+          log.warn("Failed to drop collection: {}", collectionName, e);
+        }
+      }
+      
       log.info("Successfully cleared all graph data and dropped existing graphs");
-      // Note: Graph will be created after indexing completes when handbook name is available
+      
+      // Recreate the collections we need
+      log.info("Recreating collections after clearing");
+      createCollectionIfNotExists(ENTITIES_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(OPERATIONS_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(EXAMPLES_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(EDGES_COLLECTION, CollectionType.EDGES);
+      
+      log.info("Collections recreated and ready for indexing");
     } catch (Exception e) {
       throw new IoException("Failed to clear graph data", e);
     }

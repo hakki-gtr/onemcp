@@ -252,10 +252,13 @@ activations:
       ```
       
       **Edge Type Guidelines:**
+      - **Keep edge types SHORT and FOCUSED** (1-3 words maximum)
       - Use descriptive, domain-appropriate names (e.g., `OWNS`, `CONTAINS`, `PRECEDES`, `AGGREGATES`, `VERSION_OF`)
       - Use UPPER_SNAKE_CASE for consistency
       - Choose names that clearly express the relationship semantics
       - Be specific when possible (e.g., `CREATES` instead of `RELATES_TO` if the relationship is specifically about creation)
+      - **AVOID verbose combinations**: Use `TRACKS_OVER_TIME` NOT `PRICE_AND_AVAILABILITY_TRACKED_OVER_TIME_PERIOD_AND_INTERVAL_FOR_BUSINESS`
+      - **Use description field for context**: Edge type should be the relationship name, details go in the description
       - You are free to invent new edge types that best represent the domain relationships
       
       ---
@@ -393,22 +396,30 @@ activations:
       
       The following are example edge types you might use. **You are not limited to these** - feel free to create domain-specific edge types that best represent the relationships in the handbook.
       
-      **Entity → Operation:**
-      - `HAS_OPERATION`, `PROVIDES`, `MANAGES`, `QUERIES`, `MODIFIES`, `CREATES`, `DELETES`, `UPDATES`, `RETRIEVES`
+      **Entity → Operation (1-2 words):**
+      - `HAS_OPERATION`, `PROVIDES`, `MANAGES`, `QUERIES`, `MODIFIES`, `CREATES`, `DELETES`, `UPDATES`, `RETRIEVES`, `TRACKS`, `MONITORS`
       
-      **Operation → Operation:**
-      - `RELATES_TO`, `DEPENDS_ON`, `PRECEDES`, `FOLLOWS`, `COMPLEMENTS`, `EXTENDS`, `VERSION_OF`, `ALIAS_OF`, `REPLACES`, `TRIGGERS`
+      **Operation → Operation (1-2 words):**
+      - `RELATES_TO`, `DEPENDS_ON`, `PRECEDES`, `FOLLOWS`, `COMPLEMENTS`, `EXTENDS`, `VERSION_OF`, `ALIAS_OF`, `REPLACES`, `TRIGGERS`, `USES`
       
-      **Entity → Entity:**
-      - `RELATES_TO_ENTITY`, `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, `DEPENDS_ON`, `AGGREGATES`, `COMPOSES`, `PARENT_OF`, `CHILD_OF`, `PART_OF`, `USES`
+      **Entity → Entity (1-2 words):**
+      - `RELATES_TO`, `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, `DEPENDS_ON`, `AGGREGATES`, `COMPOSES`, `PARENT_OF`, `CHILD_OF`, `PART_OF`, `USES`
       
-      **Operation → Example:**
+      **Operation → Example (1-2 words):**
       - `HAS_EXAMPLE`, `DEMONSTRATES`, `ILLUSTRATES`, `SHOWS`
       
       **Other:**
-      - `DESCRIBES`: DocChunk → Entity/Operation (documentation describes entity/operation)
+      - `DESCRIBES`: Documentation describes entity/operation
       
-      **Remember**: Choose edge types that are descriptive and meaningful for the specific domain. The more specific and semantic the edge type, the better the knowledge graph will be for RAG queries.
+      **Note**: All edge types above are **concise** (1-2 words). Follow this pattern and use the description field for additional context.
+      
+      **Remember**: 
+      - Choose edge types that are **concise yet descriptive** (1-3 words)
+      - The edge type should capture the **core relationship** (e.g., `TRACKS`, `USES`, `DEPENDS_ON`)
+      - Put additional context and details in the **description field**
+      - **BAD**: `PRICE_AND_AVAILABILITY_TRACKED_OVER_TIME_PERIOD_AND_INTERVAL_FOR_BUSINESS`
+      - **GOOD**: `TRACKS_OVER_TIME` with description: "Product price and availability tracked over time periods and intervals"
+      - The more concise yet meaningful the edge type, the better the knowledge graph will be for RAG queries
       
       ---
       
