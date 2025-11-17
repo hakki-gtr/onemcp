@@ -197,6 +197,9 @@ public class GraphIndexingService {
         arangoDbService.storeEdge(edge);
       }
 
+      // Log complete graph structure
+      logCompleteGraph(service.getSlug(), result);
+
       log.info(
           "Indexed service {} with {} entities, {} operations, {} examples, {} relationships (LLM-based)",
           service.getSlug(),
@@ -307,22 +310,21 @@ public class GraphIndexingService {
 
     try {
       // Extract JSON from response (may be wrapped in markdown code blocks)
-      String jsonStr = llmResponse.trim();
-      if (jsonStr.startsWith("```json")) {
-        jsonStr = jsonStr.substring(7);
+      String jsonStr = extractJsonFromResponse(llmResponse);
+      
+      if (jsonStr == null || jsonStr.trim().isEmpty()) {
+        log.warn("No JSON content found in LLM response for service: {}", serviceSlug);
+        logLLMParseError(serviceSlug, llmResponse, new IllegalArgumentException("No JSON content found"));
+        return new GraphExtractionResult(entities, operations, examples, relationships);
       }
-      if (jsonStr.startsWith("```")) {
-        jsonStr = jsonStr.substring(3);
-      }
-      if (jsonStr.endsWith("```")) {
-        jsonStr = jsonStr.substring(0, jsonStr.length() - 3);
-      }
-      jsonStr = jsonStr.trim();
+
+      // Try to fix common JSON issues (truncated strings, unclosed structures)
+      String fixedJson = fixTruncatedJson(jsonStr);
 
       // Parse JSON
       ObjectMapper mapper = JacksonUtility.getJsonMapper();
       @SuppressWarnings("unchecked")
-      Map<String, Object> result = mapper.readValue(jsonStr, Map.class);
+      Map<String, Object> result = mapper.readValue(fixedJson, Map.class);
 
       // Extract entities
       @SuppressWarnings("unchecked")
@@ -470,11 +472,210 @@ public class GraphIndexingService {
       }
 
     } catch (Exception e) {
-      log.error("Failed to parse LLM response, using empty result", e);
-      log.debug("LLM response was: {}", llmResponse);
+      log.error("Failed to parse LLM response for service: {}, using empty result", serviceSlug, e);
+      logLLMParseError(serviceSlug, llmResponse, e);
     }
 
     return new GraphExtractionResult(entities, operations, examples, relationships);
+  }
+
+  /**
+   * Extract JSON content from LLM response, handling markdown code blocks and other wrappers.
+   *
+   * @param response the raw LLM response
+   * @return extracted JSON string, or null if not found
+   */
+  private String extractJsonFromResponse(String response) {
+    if (response == null || response.trim().isEmpty()) {
+      return null;
+    }
+
+    String jsonStr = response.trim();
+    
+    // Remove markdown code block markers
+    if (jsonStr.startsWith("```json")) {
+      jsonStr = jsonStr.substring(7).trim();
+    } else if (jsonStr.startsWith("```")) {
+      jsonStr = jsonStr.substring(3).trim();
+    }
+    
+    if (jsonStr.endsWith("```")) {
+      jsonStr = jsonStr.substring(0, jsonStr.length() - 3).trim();
+    }
+    
+    // Try to find JSON object boundaries if response contains extra text
+    int firstBrace = jsonStr.indexOf('{');
+    int lastBrace = jsonStr.lastIndexOf('}');
+    
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
+    } else if (firstBrace >= 0) {
+      // JSON starts but doesn't end properly - might be truncated
+      jsonStr = jsonStr.substring(firstBrace);
+    }
+    
+    return jsonStr.trim();
+  }
+
+  /**
+   * Attempt to fix truncated JSON by closing unclosed strings and structures.
+   *
+   * @param jsonStr the JSON string to fix
+   * @return fixed JSON string
+   */
+  private String fixTruncatedJson(String jsonStr) {
+    if (jsonStr == null) {
+      return "{}";
+    }
+
+    StringBuilder fixed = new StringBuilder(jsonStr.length() + 200);
+    boolean inString = false;
+    boolean escaped = false;
+    int braceDepth = 0;
+    int bracketDepth = 0;
+    int lastValidPos = -1;
+    
+    for (int i = 0; i < jsonStr.length(); i++) {
+      char c = jsonStr.charAt(i);
+      
+      if (escaped) {
+        fixed.append(c);
+        escaped = false;
+        continue;
+      }
+      
+      if (c == '\\') {
+        escaped = true;
+        fixed.append(c);
+        continue;
+      }
+      
+      if (c == '"') {
+        inString = !inString;
+        fixed.append(c);
+        if (!inString) {
+          lastValidPos = fixed.length();
+        }
+        continue;
+      }
+      
+      if (!inString) {
+        if (c == '{') {
+          braceDepth++;
+          fixed.append(c);
+          lastValidPos = fixed.length();
+        } else if (c == '}') {
+          braceDepth--;
+          fixed.append(c);
+          lastValidPos = fixed.length();
+        } else if (c == '[') {
+          bracketDepth++;
+          fixed.append(c);
+          lastValidPos = fixed.length();
+        } else if (c == ']') {
+          bracketDepth--;
+          fixed.append(c);
+          lastValidPos = fixed.length();
+        } else {
+          fixed.append(c);
+          if (Character.isWhitespace(c) || c == ',' || c == ':') {
+            lastValidPos = fixed.length();
+          }
+        }
+      } else {
+        // Inside a string - just append
+        fixed.append(c);
+      }
+    }
+    
+    // If we're still in a string, close it
+    if (inString) {
+      fixed.append('"');
+      log.warn("Fixed unclosed string in JSON by adding closing quote");
+    }
+    
+    // Close any unclosed brackets/braces
+    while (bracketDepth > 0) {
+      fixed.append(']');
+      bracketDepth--;
+      log.warn("Fixed unclosed array bracket in JSON");
+    }
+    
+    while (braceDepth > 0) {
+      fixed.append('}');
+      braceDepth--;
+      log.warn("Fixed unclosed object brace in JSON");
+    }
+    
+    // If JSON appears to be truncated mid-value, try to close the last incomplete object/array
+    String result = fixed.toString();
+    
+    // If the last character before our fixes was a comma, remove it
+    if (lastValidPos > 0 && lastValidPos < result.length()) {
+      String beforeFix = result.substring(0, lastValidPos);
+      String afterFix = result.substring(lastValidPos);
+      
+      // If we added closing braces and there's a trailing comma before them, clean it up
+      if (afterFix.startsWith("}") || afterFix.startsWith("]")) {
+        // Remove trailing comma if present
+        beforeFix = beforeFix.replaceAll(",\\s*$", "");
+        result = beforeFix + afterFix;
+      }
+    }
+    
+    return result;
+  }
+
+  /**
+   * Log JSON parsing errors to a separate file for debugging.
+   *
+   * @param serviceSlug the service slug
+   * @param llmResponse the original LLM response
+   * @param error the parsing error
+   */
+  private void logLLMParseError(String serviceSlug, String llmResponse, Exception error) {
+    try {
+      File logsDir = new File("logs");
+      if (!logsDir.exists()) {
+        logsDir.mkdirs();
+      }
+      
+      // Create timestamp-based filename for error log
+      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
+      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
+      String filename = String.format("llm-parse-error-%s-%s.log", timestamp, sanitizedServiceSlug);
+      File errorLogFile = new File(logsDir, filename);
+      
+      try (FileWriter writer = new FileWriter(errorLogFile, false)) {
+        writer.write("=".repeat(80) + "\n");
+        writer.write("JSON PARSING ERROR\n");
+        writer.write("=".repeat(80) + "\n");
+        writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
+        writer.write(String.format("SERVICE: %s\n", serviceSlug));
+        writer.write(String.format("ERROR TYPE: %s\n", error.getClass().getSimpleName()));
+        writer.write(String.format("ERROR MESSAGE: %s\n", error.getMessage()));
+        writer.write("-".repeat(80) + "\n");
+        writer.write("ORIGINAL LLM RESPONSE:\n");
+        writer.write("-".repeat(80) + "\n");
+        writer.write(llmResponse);
+        writer.write("\n");
+        writer.write("-".repeat(80) + "\n");
+        writer.write("STACK TRACE:\n");
+        writer.write("-".repeat(80) + "\n");
+        
+        java.io.PrintWriter pw = new java.io.PrintWriter(writer);
+        error.printStackTrace(pw);
+        pw.flush();
+        
+        writer.write("\n");
+        writer.write("=".repeat(80) + "\n");
+        writer.flush();
+      }
+      
+      log.debug("Logged JSON parsing error to file: {}", errorLogFile.getAbsolutePath());
+    } catch (Exception e) {
+      log.warn("Failed to log JSON parsing error to file", e);
+    }
   }
 
   /**
@@ -646,6 +847,8 @@ public class GraphIndexingService {
   /**
    * Log LLM prompt messages to a file.
    *
+   * <p>Creates a separate file for each prompt using a timestamp in the filename.
+   *
    * @param serviceSlug the service slug
    * @param messages the messages sent to LLM
    */
@@ -656,13 +859,15 @@ public class GraphIndexingService {
         logsDir.mkdirs();
       }
       
-      File logFile = new File(logsDir, "llm-prompts.log");
-      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+      // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
+      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
+      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
+      String filename = String.format("llm-prompt-%s-%s.log", timestamp, sanitizedServiceSlug);
+      File logFile = new File(logsDir, filename);
       
-      try (FileWriter writer = new FileWriter(logFile, true)) {
-        writer.write("\n");
+      try (FileWriter writer = new FileWriter(logFile, false)) {
         writer.write("=".repeat(80) + "\n");
-        writer.write(String.format("TIMESTAMP: %s\n", timestamp));
+        writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
         writer.write(String.format("SERVICE: %s\n", serviceSlug));
         writer.write("=".repeat(80) + "\n");
         writer.write("PROMPT MESSAGES:\n");
@@ -676,7 +881,7 @@ public class GraphIndexingService {
           writer.write("\n");
         }
         
-        writer.write("=".repeat(80) + "\n\n");
+        writer.write("=".repeat(80) + "\n");
         writer.flush();
       }
       
@@ -687,7 +892,98 @@ public class GraphIndexingService {
   }
 
   /**
+   * Log complete graph structure to a file.
+   *
+   * <p>Creates a separate file for each graph using a timestamp in the filename.
+   * Logs all entities, operations, examples, and relationships in JSON format.
+   *
+   * @param serviceSlug the service slug
+   * @param result the graph extraction result containing all nodes and edges
+   */
+  private void logCompleteGraph(String serviceSlug, GraphExtractionResult result) {
+    try {
+      File logsDir = new File("logs");
+      if (!logsDir.exists()) {
+        logsDir.mkdirs();
+      }
+      
+      // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
+      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
+      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
+      String filename = String.format("llm-graph-%s-%s.log", timestamp, sanitizedServiceSlug);
+      File logFile = new File(logsDir, filename);
+      
+      try (FileWriter writer = new FileWriter(logFile, false)) {
+        writer.write("=".repeat(80) + "\n");
+        writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
+        writer.write(String.format("SERVICE: %s\n", serviceSlug));
+        writer.write("=".repeat(80) + "\n");
+        writer.write("COMPLETE GRAPH STRUCTURE:\n");
+        writer.write("-".repeat(80) + "\n");
+        
+        // Build complete graph structure as JSON
+        Map<String, Object> graphStructure = new HashMap<>();
+        graphStructure.put("serviceSlug", serviceSlug);
+        graphStructure.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        
+        // Convert entities to maps
+        List<Map<String, Object>> entitiesList = new ArrayList<>();
+        for (EntityNode entity : result.entities()) {
+          entitiesList.add(entity.toMap());
+        }
+        graphStructure.put("entities", entitiesList);
+        
+        // Convert operations to maps
+        List<Map<String, Object>> operationsList = new ArrayList<>();
+        for (OperationNode operation : result.operations()) {
+          operationsList.add(operation.toMap());
+        }
+        graphStructure.put("operations", operationsList);
+        
+        // Convert examples to maps
+        List<Map<String, Object>> examplesList = new ArrayList<>();
+        for (ExampleNode example : result.examples()) {
+          examplesList.add(example.toMap());
+        }
+        graphStructure.put("examples", examplesList);
+        
+        // Convert relationships to maps
+        List<Map<String, Object>> relationshipsList = new ArrayList<>();
+        for (GraphEdge edge : result.relationships()) {
+          Map<String, Object> edgeMap = edge.toMap();
+          edgeMap.put("fromKey", edge.getFromKey());
+          edgeMap.put("toKey", edge.getToKey());
+          relationshipsList.add(edgeMap);
+        }
+        graphStructure.put("relationships", relationshipsList);
+        
+        // Add summary statistics
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("totalEntities", result.entities().size());
+        summary.put("totalOperations", result.operations().size());
+        summary.put("totalExamples", result.examples().size());
+        summary.put("totalRelationships", result.relationships().size());
+        graphStructure.put("summary", summary);
+        
+        // Write as formatted JSON
+        ObjectMapper mapper = JacksonUtility.getJsonMapper();
+        String jsonOutput = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(graphStructure);
+        writer.write(jsonOutput);
+        writer.write("\n");
+        writer.write("=".repeat(80) + "\n");
+        writer.flush();
+      }
+      
+      log.debug("Logged complete graph structure to file: {}", logFile.getAbsolutePath());
+    } catch (Exception e) {
+      log.warn("Failed to log complete graph structure to file", e);
+    }
+  }
+
+  /**
    * Log LLM response to a file.
+   *
+   * <p>Creates a separate file for each response using a timestamp in the filename.
    *
    * @param serviceSlug the service slug
    * @param response the response from LLM
@@ -699,20 +995,22 @@ public class GraphIndexingService {
         logsDir.mkdirs();
       }
       
-      File logFile = new File(logsDir, "llm-responses.log");
-      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+      // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
+      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
+      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
+      String filename = String.format("llm-response-%s-%s.log", timestamp, sanitizedServiceSlug);
+      File logFile = new File(logsDir, filename);
       
-      try (FileWriter writer = new FileWriter(logFile, true)) {
-        writer.write("\n");
+      try (FileWriter writer = new FileWriter(logFile, false)) {
         writer.write("=".repeat(80) + "\n");
-        writer.write(String.format("TIMESTAMP: %s\n", timestamp));
+        writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
         writer.write(String.format("SERVICE: %s\n", serviceSlug));
         writer.write("=".repeat(80) + "\n");
         writer.write("LLM RESPONSE:\n");
         writer.write("-".repeat(80) + "\n");
         writer.write(response);
         writer.write("\n");
-        writer.write("=".repeat(80) + "\n\n");
+        writer.write("=".repeat(80) + "\n");
         writer.flush();
       }
       
