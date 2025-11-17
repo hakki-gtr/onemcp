@@ -9,6 +9,7 @@ import com.gentoro.onemcp.indexing.graph.*;
 import com.gentoro.onemcp.indexing.graph.nodes.EntityNode;
 import com.gentoro.onemcp.indexing.graph.nodes.OperationNode;
 import com.gentoro.onemcp.indexing.graph.nodes.ExampleNode;
+import com.gentoro.onemcp.indexing.graph.nodes.FieldNode;
 import com.gentoro.onemcp.model.LlmClient;
 import com.gentoro.onemcp.prompt.PromptTemplate;
 import com.gentoro.onemcp.utility.JacksonUtility;
@@ -158,6 +159,11 @@ public class GraphIndexingService {
         arangoDbService.storeNode(entity);
       }
 
+      // Index extracted fields
+      for (FieldNode field : result.fields()) {
+        arangoDbService.storeNode(field);
+      }
+
       // Index extracted operations
       for (OperationNode operation : result.operations()) {
         arangoDbService.storeNode(operation);
@@ -201,9 +207,10 @@ public class GraphIndexingService {
       logCompleteGraph(service.getSlug(), result);
 
       log.info(
-          "Indexed service {} with {} entities, {} operations, {} examples, {} relationships (LLM-based)",
+          "Indexed service {} with {} entities, {} fields, {} operations, {} examples, {} relationships (LLM-based)",
           service.getSlug(),
           result.entities().size(),
+          result.fields().size(),
           result.operations().size(),
           result.examples().size(),
           result.relationships().size());
@@ -304,6 +311,7 @@ public class GraphIndexingService {
    */
   private GraphExtractionResult parseLLMResponse(String llmResponse, String serviceSlug) {
     List<EntityNode> entities = new ArrayList<>();
+    List<FieldNode> fields = new ArrayList<>();
     List<OperationNode> operations = new ArrayList<>();
     List<ExampleNode> examples = new ArrayList<>();
     List<GraphEdge> relationships = new ArrayList<>();
@@ -315,7 +323,7 @@ public class GraphIndexingService {
       if (jsonStr == null || jsonStr.trim().isEmpty()) {
         log.warn("No JSON content found in LLM response for service: {}", serviceSlug);
         logLLMParseError(serviceSlug, llmResponse, new IllegalArgumentException("No JSON content found"));
-        return new GraphExtractionResult(entities, operations, examples, relationships);
+        return new GraphExtractionResult(entities, fields, operations, examples, relationships);
       }
 
       // Try to fix common JSON issues (truncated strings, unclosed structures)
@@ -354,6 +362,39 @@ public class GraphIndexingService {
         }
       }
 
+      // Extract fields
+      @SuppressWarnings("unchecked")
+      List<Map<String, Object>> fieldsList = (List<Map<String, Object>>) result.get("fields");
+      if (fieldsList != null) {
+        for (Map<String, Object> fieldData : fieldsList) {
+          String key = (String) fieldData.get("key");
+          String name = (String) fieldData.get("name");
+          String description = (String) fieldData.getOrDefault("description", "");
+          String fieldType = (String) fieldData.getOrDefault("fieldType", "string");
+          String entityKey = (String) fieldData.get("entityKey");
+          String source = (String) fieldData.getOrDefault("source", null);
+          
+          // Generate key if not provided
+          if (key == null && entityKey != null && name != null) {
+            String entityName = entityKey.replace("entity|", "");
+            key = "field|" + sanitizeKey(entityName + "_" + name);
+          } else if (key == null) {
+            log.warn("Field missing key, name, or entityKey, skipping");
+            continue;
+          }
+          
+          FieldNode field = new FieldNode(
+              key,
+              name,
+              description,
+              fieldType,
+              entityKey,
+              serviceSlug,
+              source);
+          fields.add(field);
+        }
+      }
+
       // Extract operations
       @SuppressWarnings("unchecked")
       List<Map<String, Object>> operationsList = (List<Map<String, Object>>) result.get("operations");
@@ -371,8 +412,10 @@ public class GraphIndexingService {
           @SuppressWarnings("unchecked")
           List<String> exampleKeys = (List<String>) opData.getOrDefault("exampleKeys", new ArrayList<>());
           String documentationUri = (String) opData.getOrDefault("documentationUri", "");
-          String requestSchema = (String) opData.getOrDefault("requestSchema", null);
-          String responseSchema = (String) opData.getOrDefault("responseSchema", null);
+          Object requestSchemaObj = opData.getOrDefault("requestSchema", null);
+          String requestSchema = requestSchemaObj != null ? convertToString(requestSchemaObj) : null;
+          Object responseSchemaObj = opData.getOrDefault("responseSchema", null);
+          String responseSchema = responseSchemaObj != null ? convertToString(responseSchemaObj) : null;
           @SuppressWarnings("unchecked")
           List<String> operationExamples = (List<String>) opData.getOrDefault("examples", null);
           String category = (String) opData.getOrDefault("category", null);
@@ -476,7 +519,7 @@ public class GraphIndexingService {
       logLLMParseError(serviceSlug, llmResponse, e);
     }
 
-    return new GraphExtractionResult(entities, operations, examples, relationships);
+    return new GraphExtractionResult(entities, fields, operations, examples, relationships);
   }
 
   /**
@@ -707,6 +750,7 @@ public class GraphIndexingService {
    */
   private record GraphExtractionResult(
       List<EntityNode> entities,
+      List<FieldNode> fields,
       List<OperationNode> operations,
       List<ExampleNode> examples,
       List<GraphEdge> relationships) {}
@@ -933,6 +977,13 @@ public class GraphIndexingService {
         }
         graphStructure.put("entities", entitiesList);
         
+        // Convert fields to maps
+        List<Map<String, Object>> fieldsList = new ArrayList<>();
+        for (FieldNode field : result.fields()) {
+          fieldsList.add(field.toMap());
+        }
+        graphStructure.put("fields", fieldsList);
+        
         // Convert operations to maps
         List<Map<String, Object>> operationsList = new ArrayList<>();
         for (OperationNode operation : result.operations()) {
@@ -960,6 +1011,7 @@ public class GraphIndexingService {
         // Add summary statistics
         Map<String, Object> summary = new HashMap<>();
         summary.put("totalEntities", result.entities().size());
+        summary.put("totalFields", result.fields().size());
         summary.put("totalOperations", result.operations().size());
         summary.put("totalExamples", result.examples().size());
         summary.put("totalRelationships", result.relationships().size());

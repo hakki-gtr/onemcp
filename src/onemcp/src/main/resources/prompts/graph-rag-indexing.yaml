@@ -2,32 +2,18 @@ activations:
   - role: system
     activation: graph-rag-indexing
     content: |
-      You are a **Graph RAG Indexing Agent** responsible for analyzing handbook documentation
-      and extracting structured knowledge graph data (entities, operations, and relationships)
-      for indexing into ArangoDB.
+      You are a **Graph RAG Indexing Agent** extracting structured knowledge graph data (entities, fields, operations, examples, relationships) from handbook documentation for ArangoDB indexing.
       
-      Your task is to analyze the handbook structure and extract:
-      1. **Entities** - Core domain concepts, business entities, and API tags
-      2. **Operations** - API endpoints and their capabilities
-      3. **Relationships** - How entities relate to operations and each other (both explicit and implicit)
-      
-      **Important**: Beyond extracting explicit relationships, you must also perform semantic analysis
-      to identify hidden meanings, correlations, and contextual relationships that enrich the knowledge graph.
-      This includes inferring implicit connections, identifying workflow patterns, extracting conceptual
-      hierarchies, and finding domain correlations that may not be explicitly documented.
-      
+      Extract explicit and implicit relationships through semantic analysis: infer connections, identify workflows, extract hierarchies, and find domain correlations.
+
       ---
 
   - role: user
     activation: graph-rag-indexing
     content: |
-      # Handbook Analysis for Graph RAG Indexing
+      # Handbook Analysis
       
-      Analyze the following handbook structure and extract entities, operations, and their relationships.
-      
-      ## Handbook Structure
-      
-      The handbook contains three main sources of information:
+      Extract entities, fields, operations, examples, and relationships from:
       
       ### 1. Instructions Document (`instructions.md`)
       ```markdown
@@ -67,23 +53,11 @@ activations:
     content: |
       # Extraction Instructions
       
-      Based on the handbook content above, extract the following structured data:
+      ## 1. Entities
       
-      ## 1. Entity Extraction
+      **Sources:** `instructions.md` "Core Entities" section, OpenAPI `tags:` section
       
-      Extract entities from multiple sources:
-      
-      **From `instructions.md`:**
-      - Identify "Core Entities" section
-      - Extract each entity mentioned (e.g., Sales, Products, Customers, Regions)
-      - Capture entity descriptions and key attributes
-      
-      **From OpenAPI Tags:**
-      - Extract all tags defined in the `tags:` section
-      - Use tag name as entity identifier
-      - Use tag description as entity description
-      
-      **Entity Format:**
+      **Format:**
       ```json
       {
         "key": "entity|{entityName}",
@@ -91,176 +65,117 @@ activations:
         "description": "Entity description",
         "source": "instructions" | "openapi_tag",
         "serviceSlug": "service_slug",
-        "attributes": ["attribute1", "attribute2"],
-        "domain": "domain context from instructions"
+        "domain": "domain context"
       }
       ```
       
-      ## 2. Operation Extraction
+      **Note:** Fields extracted separately as Field nodes with `HAS_FIELD` edges.
       
-      Extract operations from:
+      ## 2. Fields
       
-      **From OpenAPI Paths:**
-      - Each path item (GET, POST, PUT, DELETE, etc.)
-      - Extract operationId, method, path, summary, description
-      - Extract tags associated with the operation
-      - Extract request/response schemas and examples
+      Extract fields as **separate Field nodes** connected via `HAS_FIELD` edges. Sources:
+      1. **OpenAPI schemas** (`components/schemas`): Extract all properties, capture types (string/number/date/boolean/array/object)
+      2. **Operation schemas**: Request/response bodies, query/path parameters
+      3. **Examples**: JSON structures in request/response bodies
+      4. **Descriptions**: Parse entity/operation descriptions for field mentions
+      5. **Instructions.md**: Explicit field lists
+      6. **Documentation**: Parameter descriptions, code examples
       
-      **From Service Definitions:**
-      - Match operations from service.yaml
-      - Include operation documentation from markdown files
-      - Extract operation signatures and capabilities
+      **Guidelines:** Use camelCase, remove duplicates, prioritize common fields (5-20 per entity), use dot notation for nested fields (e.g., `address.city`).
       
-      **Operation Category Classification:**
+      **Format:**
+      ```json
+      {
+        "key": "field|{entityName}_{fieldName}",
+        "name": "fieldName",
+        "description": "Field description",
+        "fieldType": "string" | "number" | "date" | "boolean" | "array" | "object",
+        "entityKey": "entity|{entityName}",
+        "serviceSlug": "service_slug",
+        "source": "schema" | "example" | "documentation" | "instructions"
+      }
+      ```
       
-      In OpenAPI-based systems, operations generally fall into the following categories:
+      **Required Edge:** `entity|{entityName}` → `HAS_FIELD` → `field|{entityName}_{fieldName}`
       
-      | Operation | Common Aliases | Description | Example |
-      |----------|-----------------|-------------|---------|
-      | **Retrieve** | Get, Fetch, List, Filter, Collect | Retrieves one or more entities from the backend system. No data is modified. | Get the list of customers created in 2024. |
-      | **Create** | Add, Save, Write, Insert | Creates a new entity and persists it to the backend system. | Create a new customer record. |
-      | **Update** | Modify, Change, Edit, Append | Alters an existing entity by replacing or extending its data. | Update my address to XYZ. |
-      | **Delete** | Remove, Erase, Drop | Permanently deletes an entity from the backend system. | Delete all my sales records. |
-      | **Compute** | Calculate, Process | Performs a backend computation using provided or retrieved input. No entity is directly created or modified. | Calculate the distance between point A and point B. |
+      ## 3. Operations
       
-      **Category Determination:**
-      - Analyze the HTTP method: GET typically indicates Retrieve, POST often indicates Create or Compute, PUT/PATCH indicate Update, DELETE indicates Delete
-      - Analyze the operation name/operationId: Look for keywords like "get", "list", "fetch" (Retrieve), "create", "add", "save" (Create), "update", "modify", "edit" (Update), "delete", "remove" (Delete), "calculate", "process" (Compute)
-      - Analyze the operation description and summary: Understand the operation's purpose and behavior
-      - Consider the operation's side effects: Does it modify data? Does it create new entities? Does it only retrieve?
-      - Default to the most appropriate category based on the above analysis
+      **Sources:** OpenAPI paths, service.yaml, operation documentation
       
-      **Operation Format:**
+      **Category Classification:**
+      - **Retrieve**: GET, keywords: get/list/fetch (reads data)
+      - **Create**: POST, keywords: create/add/save (creates entities)
+      - **Update**: PUT/PATCH, keywords: update/modify/edit (modifies entities)
+      - **Delete**: DELETE, keywords: delete/remove (deletes entities)
+      - **Compute**: POST, keywords: calculate/process (computes without creating/modifying)
+      
+      Determine by HTTP method, operation name, description, and side effects.
+      
+      **Format:**
       ```json
       {
         "key": "op|{operationId}",
         "operationId": "operationId",
         "method": "GET|POST|PUT|DELETE|PATCH",
         "path": "/api/path",
-        "summary": "Operation summary",
-        "description": "Detailed description",
+        "summary": "Summary",
+        "description": "Description",
         "category": "Retrieve" | "Create" | "Update" | "Delete" | "Compute",
         "serviceSlug": "service_slug",
         "tags": ["tag1", "tag2"],
         "signature": "METHOD /path - summary",
         "documentationUri": "path/to/doc.md",
-        "requestSchema": "schema reference or description",
-        "responseSchema": "schema reference or description",
-        "examples": ["example1", "example2"]
+        "requestSchema": "schema reference",
+        "responseSchema": "schema reference",
+        "examples": ["example1"]
       }
       ```
       
-      ## 3. Example Extraction
+      ## 4. Examples
       
-      Extract examples from:
+      **Sources:** OpenAPI examples, operation documentation
       
-      **From OpenAPI Specifications:**
-      - Extract examples from request/response bodies in OpenAPI paths
-      - Extract examples from `examples:` sections in media types
-      - Extract example values from schema `example:` fields
-      - Extract example values from parameter `example:` fields
-      
-      **From Service Documentation:**
-      - Extract code examples from operation markdown documentation
-      - Extract request/response examples from documentation
-      - Extract usage examples and snippets
-      
-      **Example Format:**
+      **Format:**
       ```json
       {
         "key": "example|{operationId}_{exampleName}",
         "name": "Example Name",
-        "summary": "Brief summary of the example",
-        "description": "Detailed description of what this example demonstrates",
-        "requestBody": "JSON or text representation of request body",
-        "responseBody": "JSON or text representation of response body",
-        "responseStatus": "200" | "201" | "400" | etc.,
+        "summary": "Summary",
+        "description": "Description",
+        "requestBody": "Request JSON/text",
+        "responseBody": "Response JSON/text",
+        "responseStatus": "200",
         "operationKey": "op|{operationId}",
         "serviceSlug": "service_slug"
       }
       ```
       
-      ## 4. Relationship Extraction
+      ## 5. Relationships
       
-      Identify relationships between entities, operations, and examples. Extract BOTH explicit and implicit relationships.
+      Extract explicit and implicit relationships. Use domain-appropriate edge types (1-3 words, UPPER_SNAKE_CASE).
       
-      **You have full flexibility to define edge types** that best represent the domain-specific relationships in the handbook.
-      Choose edge type names that are descriptive and meaningful for the specific service domain.
+      **Patterns:**
+      - **Entity → Operation**: `HAS_OPERATION`, `PROVIDES`, `MANAGES`, `QUERIES`, `MODIFIES`, `CREATES`, `DELETES`
+      - **Operation → Operation**: `RELATES_TO`, `DEPENDS_ON`, `PRECEDES`, `FOLLOWS`, `COMPLEMENTS`, `EXTENDS`
+      - **Entity → Entity**: `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, `DEPENDS_ON`, `AGGREGATES`, `COMPOSES`
+      - **Entity → Field**: `HAS_FIELD` (REQUIRED for all entity-field relationships)
+      - **Operation → Example**: `HAS_EXAMPLE`, `DEMONSTRATES`, `ILLUSTRATES`
       
-      **Common Relationship Patterns:**
+      **Semantic Analysis:** Infer relationships from descriptions, examples, workflows, hierarchies, domain correlations, and implicit dependencies.
       
-      **Entity → Operation relationships:**
-      - Link entities (tags) to operations that have those tags
-      - Link domain entities from instructions.md to operations that work with them
-      - **Infer implicit relationships**: If an operation's description, parameters, or examples reference an entity concept (even without explicit tags), create the relationship
-      - Example edge types: `HAS_OPERATION`, `PROVIDES`, `MANAGES`, `QUERIES`, `MODIFIES`, `CREATES`, `DELETES`, etc.
-      
-      **Operation → Operation relationships:**
-      - Identify operations that are related (e.g., query operations that complement each other)
-      - Operations that share similar schemas or purposes
-      - **Extract workflow patterns**: Identify operations that form logical workflows (e.g., create → update → delete sequences, or query → filter → aggregate chains)
-      - **Identify conceptual relationships**: Operations that work with the same domain concepts, even if they use different schemas
-      - **Find complementary operations**: Operations that are often used together or solve related problems
-      - Example edge types: `RELATES_TO`, `DEPENDS_ON`, `PRECEDES`, `FOLLOWS`, `COMPLEMENTS`, `EXTENDS`, `VERSION_OF`, `ALIAS_OF`, etc.
-      
-      **Entity → Entity relationships:**
-      - Identify relationships between domain entities (e.g., Customer → Sale → Product)
-      - Extract from entity relationship diagrams in instructions or OpenAPI descriptions
-      - **Infer semantic relationships**: Analyze entity descriptions, attributes, and usage patterns to identify:
-        - Hierarchical relationships (parent-child, part-of, contains)
-        - Conceptual dependencies (entity A is used by entity B)
-        - Domain correlations (entities that appear together in operations or examples)
-        - Business logic relationships (e.g., Customer owns Orders, Orders contain Products)
-      - Example edge types: `RELATES_TO_ENTITY`, `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, `DEPENDS_ON`, `AGGREGATES`, `COMPOSES`, etc.
-      
-      **Operation → Example relationships:**
-      - Link operations to their examples
-      - Each example should be linked to its parent operation
-      - Example edge types: `HAS_EXAMPLE`, `DEMONSTRATES`, `ILLUSTRATES`, etc.
-      
-      **Semantic Analysis & Hidden Correlations:**
-      
-      Beyond explicit relationships, analyze the handbook content to extract:
-      
-      - **Conceptual hierarchies**: Identify parent-child relationships between entities based on domain knowledge (e.g., Product → ProductVariant → ProductImage)
-      - **Usage patterns**: Identify which operations are typically used together based on:
-        - Shared parameters or response fields
-        - Sequential workflows mentioned in documentation
-        - Common use cases described in examples
-      - **Domain correlations**: Find entities that are conceptually related even if not explicitly linked:
-        - Entities that appear in the same operations
-        - Entities with similar attribute patterns
-        - Entities mentioned together in documentation or examples
-      - **Implicit dependencies**: Identify when operations logically depend on others:
-        - Operations that require data from other operations first
-        - Operations that are prerequisites for other operations
-        - Operations that modify data used by other operations
-      - **Contextual relationships**: Extract relationships based on:
-        - Semantic similarity in descriptions
-        - Shared domain concepts or business processes
-        - Common patterns in request/response structures
-      
-      **Relationship Format:**
+      **Format:**
       ```json
       {
-        "fromKey": "entity_key or op_key",
-        "toKey": "entity_key or op_key or example_key",
-        "edgeType": "descriptive_edge_type_name",
+        "fromKey": "entity_key | op_key | field_key",
+        "toKey": "entity_key | op_key | example_key | field_key",
+        "edgeType": "EDGE_TYPE",
         "description": "Relationship description",
         "strength": "strong" | "moderate" | "weak"
       }
       ```
       
-      **Edge Type Guidelines:**
-      - **Keep edge types SHORT and FOCUSED** (1-3 words maximum)
-      - Use descriptive, domain-appropriate names (e.g., `OWNS`, `CONTAINS`, `PRECEDES`, `AGGREGATES`, `VERSION_OF`)
-      - Use UPPER_SNAKE_CASE for consistency
-      - Choose names that clearly express the relationship semantics
-      - Be specific when possible (e.g., `CREATES` instead of `RELATES_TO` if the relationship is specifically about creation)
-      - **AVOID verbose combinations**: Use `TRACKS_OVER_TIME` NOT `PRICE_AND_AVAILABILITY_TRACKED_OVER_TIME_PERIOD_AND_INTERVAL_FOR_BUSINESS`
-      - **Use description field for context**: Edge type should be the relationship name, details go in the description
-      - You are free to invent new edge types that best represent the domain relationships
-      
+      **Edge Type Rules:** Keep concise (1-3 words), use description for details, avoid verbose names (e.g., use `TRACKS_OVER_TIME` not `PRICE_AND_AVAILABILITY_TRACKED_OVER_TIME_PERIOD_AND_INTERVAL_FOR_BUSINESS`).
+
       ---
 
   - role: user
@@ -268,160 +183,31 @@ activations:
     content: |
       # Output Format
       
-      **Note:** If the handbook contains multiple services, extract entities and operations for each service separately.
-      You may provide either:
-      - A single JSON object with all services (recommended for single-service handbooks)
-      - An array of JSON objects, one per service (recommended for multi-service handbooks)
-      
-      Provide your analysis as a structured JSON object with the following format:
+      Provide structured JSON (single object for single-service, array for multi-service):
       
       ```json
       {
         "handbookName": "handbook_name",
         "serviceSlug": "service_slug",
-        "entities": [
-          {
-            "key": "entity|{entityName}",
-            "name": "Entity Name",
-            "description": "Entity description from instructions or OpenAPI tag",
-            "source": "instructions" | "openapi_tag",
-            "serviceSlug": "service_slug",
-            "attributes": ["attribute1", "attribute2"],
-            "domain": "domain context"
-          }
-        ],
-        "operations": [
-          {
-            "key": "op|{operationId}",
-            "operationId": "operationId",
-            "method": "GET|POST|PUT|DELETE|PATCH",
-            "path": "/api/path",
-            "summary": "Operation summary",
-            "description": "Detailed description",
-            "category": "Retrieve" | "Create" | "Update" | "Delete" | "Compute",
-            "serviceSlug": "service_slug",
-            "tags": ["tag1", "tag2"],
-            "signature": "METHOD /path - summary",
-            "documentationUri": "path/to/doc.md",
-            "requestSchema": "schema reference",
-            "responseSchema": "schema reference",
-            "examples": ["example1"]
-          }
-        ],
-        "examples": [
-          {
-            "key": "example|{operationId}_{exampleName}",
-            "name": "Example Name",
-            "summary": "Brief summary",
-            "description": "Detailed description",
-            "requestBody": "Request body JSON or text",
-            "responseBody": "Response body JSON or text",
-            "responseStatus": "200",
-            "operationKey": "op|{operationId}",
-            "serviceSlug": "service_slug"
-          }
-        ],
-        "relationships": [
-          {
-            "fromKey": "entity|{entityName}",
-            "toKey": "op|{operationId}",
-            "edgeType": "HAS_OPERATION",
-            "description": "Entity has this operation",
-            "strength": "strong"
-          },
-          {
-            "fromKey": "op|{operationId1}",
-            "toKey": "op|{operationId2}",
-            "edgeType": "PRECEDES",
-            "description": "First operation typically precedes the second in workflows",
-            "strength": "moderate"
-          },
-          {
-            "fromKey": "entity|{entityName1}",
-            "toKey": "entity|{entityName2}",
-            "edgeType": "CONTAINS",
-            "description": "First entity contains or owns the second entity",
-            "strength": "strong"
-          },
-          {
-            "fromKey": "op|{operationId}",
-            "toKey": "example|{operationId}_{exampleName}",
-            "edgeType": "HAS_EXAMPLE",
-            "description": "Operation has this example",
-            "strength": "strong"
-          },
-          {
-            "fromKey": "op|{operationId1}",
-            "toKey": "op|{operationId2}",
-            "edgeType": "DEPENDS_ON",
-            "description": "First operation depends on data from the second operation",
-            "strength": "strong"
-          }
-        ],
-        "metadata": {
-          "extractedAt": "timestamp",
-          "sources": ["instructions.md", "openapi/*.yaml", ".services/*/service.yaml"],
-          "entityCount": 0,
-          "operationCount": 0,
-          "relationshipCount": 0
-        }
+        "entities": [{"key": "entity|{name}", "name": "Name", "description": "...", "source": "...", "serviceSlug": "...", "domain": "..."}],
+        "fields": [{"key": "field|{entity}_{field}", "name": "field", "description": "...", "fieldType": "...", "entityKey": "entity|...", "serviceSlug": "...", "source": "..."}],
+        "operations": [{"key": "op|{id}", "operationId": "...", "method": "...", "path": "...", "summary": "...", "description": "...", "category": "...", "serviceSlug": "...", "tags": [...], "signature": "...", "documentationUri": "...", "requestSchema": "...", "responseSchema": "...", "examples": [...]}],
+        "examples": [{"key": "example|{op}_{name}", "name": "...", "summary": "...", "description": "...", "requestBody": "...", "responseBody": "...", "responseStatus": "...", "operationKey": "op|...", "serviceSlug": "..."}],
+        "relationships": [{"fromKey": "...", "toKey": "...", "edgeType": "...", "description": "...", "strength": "..."}],
+        "metadata": {"extractedAt": "timestamp", "sources": [...], "entityCount": 0, "fieldCount": 0, "operationCount": 0, "relationshipCount": 0}
       }
       ```
       
-      ## Key Requirements
+      ## Requirements
       
-      1. **Entity Keys**: Must follow pattern `entity|{sanitized_entity_name}`
-      2. **Operation Keys**: Must follow pattern `op|{sanitized_operation_id}`
-      3. **Sanitization**: Keys should be lowercase, alphanumeric with pipe (|) as separator
-      4. **Edge Keys**: Must follow pattern `{fromKey}<>{toKey}` (e.g., `entity|analytics<>op|querysalesdata`)
-      5. **Completeness**: Extract ALL entities and operations found in the handbook
-      6. **Relationships**: Create relationships for:
-         - Every tag entity → operations that have those tags (choose appropriate edge type like `HAS_OPERATION`, `PROVIDES`, `MANAGES`, etc.)
-         - Domain entities from instructions → operations that work with them
-         - Related operations (choose appropriate edge type like `RELATES_TO`, `PRECEDES`, `DEPENDS_ON`, `COMPLEMENTS`, etc.)
-         - Related entities from relationship diagrams (choose appropriate edge type like `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, etc.)
-         - Every operation → its examples (choose appropriate edge type like `HAS_EXAMPLE`, `DEMONSTRATES`, etc.)
-         - **IMPORTANT**: Also extract implicit and semantic relationships:
-           - Infer entity-operation relationships from descriptions and examples (not just tags)
-           - Identify workflow patterns and operation sequences
-           - Extract conceptual hierarchies and domain correlations between entities
-           - Find complementary operations and implicit dependencies
-           - Build contextual relationships based on semantic analysis
-         - **Edge Type Selection**: Choose edge types that best represent the domain-specific semantics. You have full flexibility to define custom edge types that are meaningful for the specific service domain.
-      7. **Examples**: Extract ALL examples found in OpenAPI specs and documentation
-      8. **Consistency**: Ensure all keys reference existing entities/operations/examples
-      9. **Semantic Depth**: Go beyond surface-level extraction. Analyze the meaning, context, and implicit connections in the documentation to build a richer, more contextual knowledge graph
-      
-      ## Edge Types Reference (Examples & Suggestions)
-      
-      The following are example edge types you might use. **You are not limited to these** - feel free to create domain-specific edge types that best represent the relationships in the handbook.
-      
-      **Entity → Operation (1-2 words):**
-      - `HAS_OPERATION`, `PROVIDES`, `MANAGES`, `QUERIES`, `MODIFIES`, `CREATES`, `DELETES`, `UPDATES`, `RETRIEVES`, `TRACKS`, `MONITORS`
-      
-      **Operation → Operation (1-2 words):**
-      - `RELATES_TO`, `DEPENDS_ON`, `PRECEDES`, `FOLLOWS`, `COMPLEMENTS`, `EXTENDS`, `VERSION_OF`, `ALIAS_OF`, `REPLACES`, `TRIGGERS`, `USES`
-      
-      **Entity → Entity (1-2 words):**
-      - `RELATES_TO`, `CONTAINS`, `OWNS`, `BELONGS_TO`, `REFERENCES`, `DEPENDS_ON`, `AGGREGATES`, `COMPOSES`, `PARENT_OF`, `CHILD_OF`, `PART_OF`, `USES`
-      
-      **Operation → Example (1-2 words):**
-      - `HAS_EXAMPLE`, `DEMONSTRATES`, `ILLUSTRATES`, `SHOWS`
-      
-      **Other:**
-      - `DESCRIBES`: Documentation describes entity/operation
-      
-      **Note**: All edge types above are **concise** (1-2 words). Follow this pattern and use the description field for additional context.
-      
-      **Remember**: 
-      - Choose edge types that are **concise yet descriptive** (1-3 words)
-      - The edge type should capture the **core relationship** (e.g., `TRACKS`, `USES`, `DEPENDS_ON`)
-      - Put additional context and details in the **description field**
-      - **BAD**: `PRICE_AND_AVAILABILITY_TRACKED_OVER_TIME_PERIOD_AND_INTERVAL_FOR_BUSINESS`
-      - **GOOD**: `TRACKS_OVER_TIME` with description: "Product price and availability tracked over time periods and intervals"
-      - The more concise yet meaningful the edge type, the better the knowledge graph will be for RAG queries
+      1. **Keys:** `entity|{name}`, `op|{id}`, `field|{entity}_{field}`, `example|{op}_{name}` (lowercase, alphanumeric, pipe separator)
+      2. **Completeness:** Extract ALL entities, fields, operations, examples
+      3. **Fields:** MUST create Field nodes (3-5+ per entity) with `HAS_FIELD` edges from entities
+      4. **Relationships:** Create for entity→fields (REQUIRED), entity→operations, operation→operation, entity→entity, operation→examples. Extract implicit relationships via semantic analysis.
+      5. **Edge Types:** Domain-appropriate, concise (1-3 words), UPPER_SNAKE_CASE
+      6. **Consistency:** All keys must reference existing nodes
+      7. **Semantic Depth:** Analyze meaning, context, and implicit connections
       
       ---
       
-      Now analyze the handbook content and provide the structured JSON output.
-
+      Analyze the handbook and provide structured JSON output.

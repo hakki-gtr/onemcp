@@ -38,6 +38,7 @@ public class ArangoDbService {
   private static final String ENTITIES_COLLECTION = "entities";
   private static final String OPERATIONS_COLLECTION = "operations";
   private static final String EXAMPLES_COLLECTION = "examples";
+  private static final String FIELDS_COLLECTION = "fields";
   
   // Edge collections for different relationship types
   private static final String EDGES_COLLECTION = "edges";
@@ -100,6 +101,7 @@ public class ArangoDbService {
       createCollectionIfNotExists(ENTITIES_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(OPERATIONS_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(EXAMPLES_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(FIELDS_COLLECTION, CollectionType.DOCUMENT);
 
       // Create edge collection for relationships
       createCollectionIfNotExists(EDGES_COLLECTION, CollectionType.EDGES);
@@ -199,7 +201,8 @@ public class ArangoDbService {
       String[] vertexCollections = new String[] {
           ENTITIES_COLLECTION,
           OPERATIONS_COLLECTION,
-          EXAMPLES_COLLECTION
+          EXAMPLES_COLLECTION,
+          FIELDS_COLLECTION
       };
       
       // Create edge definition - edges can connect any vertex collection to any other
@@ -388,6 +391,7 @@ public class ArangoDbService {
       case "entity" -> ENTITIES_COLLECTION;
       case "operation" -> OPERATIONS_COLLECTION;
       case "example" -> EXAMPLES_COLLECTION;
+      case "field" -> FIELDS_COLLECTION;
       default -> throw new IllegalArgumentException("Unknown node type: " + nodeType);
     };
   }
@@ -403,6 +407,7 @@ public class ArangoDbService {
     if (key.startsWith("entity|") || key.startsWith("entity_")) return ENTITIES_COLLECTION;
     if (key.startsWith("op|") || key.startsWith("op_")) return OPERATIONS_COLLECTION;
     if (key.startsWith("example|") || key.startsWith("example_")) return EXAMPLES_COLLECTION;
+    if (key.startsWith("field|") || key.startsWith("field_")) return FIELDS_COLLECTION;
     
     // Default to entities for backward compatibility
     return ENTITIES_COLLECTION;
@@ -508,6 +513,7 @@ public class ArangoDbService {
       createCollectionIfNotExists(ENTITIES_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(OPERATIONS_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(EXAMPLES_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(FIELDS_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(EDGES_COLLECTION, CollectionType.EDGES);
       
       log.info("Collections recreated and ready for indexing");
