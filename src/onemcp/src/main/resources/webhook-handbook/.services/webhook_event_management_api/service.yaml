@@ -1,0 +1,62 @@
+checksum: 9876543210
+slug: webhook_event_management_api
+definitionUri: openapi/webhook-event-management-api.yaml
+resourcesUri: .services/webhook_event_management_api
+readmeUri: .services/webhook_event_management_api/README.md
+operations:
+- documentationUri: .services/webhook_event_management_api/listEventTypes.md
+  operation: listEventTypes
+  method: GET
+  path: /events
+  summary: |
+    Retrieve all event types that can be subscribed to. Includes event schemas and descriptions.
+- documentationUri: .services/webhook_event_management_api/listSubscriptions.md
+  operation: listSubscriptions
+  method: GET
+  path: /subscriptions
+  summary: |
+    List all webhook subscriptions with optional filtering by event type or status.
+    Supports pagination for large result sets.
+- documentationUri: .services/webhook_event_management_api/createSubscription.md
+  operation: createSubscription
+  method: POST
+  path: /subscriptions
+  summary: |
+    Create a new webhook subscription. Requires event types and endpoint URL.
+    Optionally configure retry policies, filters, and custom headers.
+- documentationUri: .services/webhook_event_management_api/getSubscription.md
+  operation: getSubscription
+  method: GET
+  path: /subscriptions/{subscription_id}
+  summary: |
+    Retrieve detailed information about a specific subscription including delivery statistics.
+- documentationUri: .services/webhook_event_management_api/deleteSubscription.md
+  operation: deleteSubscription
+  method: DELETE
+  path: /subscriptions/{subscription_id}
+  summary: |
+    Delete a webhook subscription. Stops receiving events immediately.
+- documentationUri: .services/webhook_event_management_api/getWebhookStatus.md
+  operation: getWebhookStatus
+  method: GET
+  path: /webhooks/{webhook_id}
+  summary: |
+    Get delivery status and details for a specific webhook including retry attempts and errors.
+- documentationUri: .services/webhook_event_management_api/retryWebhook.md
+  operation: retryWebhook
+  method: POST
+  path: /webhooks/{webhook_id}/retry
+  summary: |
+    Manually retry delivery of a failed webhook. Respects retry policy limits.
+- documentationUri: .services/webhook_event_management_api/listEndpoints.md
+  operation: listEndpoints
+  method: GET
+  path: /endpoints
+  summary: |
+    List all webhook endpoints with health status and subscription counts.
+- documentationUri: .services/webhook_event_management_api/healthCheck.md
+  operation: healthCheck
+  method: GET
+  path: /health
+  summary: Check the health status of the API and its services
+

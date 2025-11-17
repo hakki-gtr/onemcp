@@ -1,0 +1,661 @@
+openapi: 3.0.3
+info:
+  title: Webhook Event Management API
+  description: |
+    An event-driven API for managing webhook subscriptions, event delivery, and retry policies.
+    This API provides operations to subscribe to events, configure webhook endpoints, monitor
+    delivery status, and handle retries for failed webhooks.
+    
+    ## Key Features
+    - **Event Subscriptions**: Subscribe to specific event types
+    - **Webhook Delivery**: Automatic delivery of events to configured endpoints
+    - **Retry Management**: Configurable retry policies for failed deliveries
+    - **Delivery Monitoring**: Track webhook delivery status and history
+    
+    ## Core Concepts
+    - **Events**: Occurrences in the system that can trigger webhooks
+    - **Subscriptions**: Configurations linking event types to webhook endpoints
+    - **Webhooks**: Individual delivery attempts with status tracking
+    - **Endpoints**: Target URLs that receive webhook payloads
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/webhooks
+    description: Production server
+tags:
+  - name: Events
+    description: Event type management
+  - name: Subscriptions
+    description: Webhook subscription management
+  - name: Webhooks
+    description: Webhook delivery operations
+  - name: Endpoints
+    description: Endpoint management
+  - name: System
+    description: System operations
+
+paths:
+  /events:
+    get:
+      operationId: listEventTypes
+      summary: List available event types
+      description: Retrieve all event types that can be subscribed to
+      tags:
+        - Events
+      responses:
+        '200':
+          description: List of event types retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventTypesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /subscriptions:
+    get:
+      operationId: listSubscriptions
+      summary: List all webhook subscriptions
+      description: Retrieve all active webhook subscriptions with optional filtering
+      tags:
+        - Subscriptions
+      parameters:
+        - name: event_type
+          in: query
+          description: Filter by event type
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by subscription status
+          required: false
+          schema:
+            type: string
+            enum: [active, paused, disabled]
+        - name: limit
+          in: query
+          description: Maximum number of subscriptions to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+        - name: offset
+          in: query
+          description: Number of subscriptions to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of subscriptions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionsResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    post:
+      operationId: createSubscription
+      summary: Create a new webhook subscription
+      description: Subscribe to one or more event types with a webhook endpoint
+      tags:
+        - Subscriptions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionRequest'
+      responses:
+        '201':
+          description: Subscription created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '400':
+          description: Invalid subscription data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /subscriptions/{subscription_id}:
+    get:
+      operationId: getSubscription
+      summary: Get subscription details
+      description: Retrieve detailed information about a specific subscription
+      tags:
+        - Subscriptions
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          description: Unique subscription identifier
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Subscription details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '404':
+          description: Subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    delete:
+      operationId: deleteSubscription
+      summary: Delete a webhook subscription
+      description: Remove a webhook subscription and stop receiving events
+      tags:
+        - Subscriptions
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          description: Unique subscription identifier
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Subscription deleted successfully
+        '404':
+          description: Subscription not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /webhooks/{webhook_id}:
+    get:
+      operationId: getWebhookStatus
+      summary: Get webhook delivery status
+      description: Retrieve delivery status and details for a specific webhook
+      tags:
+        - Webhooks
+      parameters:
+        - name: webhook_id
+          in: path
+          required: true
+          description: Unique webhook identifier
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookStatusResponse'
+        '404':
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /webhooks/{webhook_id}/retry:
+    post:
+      operationId: retryWebhook
+      summary: Retry a failed webhook delivery
+      description: Manually retry delivery of a failed webhook
+      tags:
+        - Webhooks
+      parameters:
+        - name: webhook_id
+          in: path
+          required: true
+          description: Unique webhook identifier
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Retry request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookRetryResponse'
+        '400':
+          description: Webhook cannot be retried
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /endpoints:
+    get:
+      operationId: listEndpoints
+      summary: List all webhook endpoints
+      description: Retrieve all configured webhook endpoints
+      tags:
+        - Endpoints
+      responses:
+        '200':
+          description: List of endpoints retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndpointsResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      description: Check the health status of the API
+      tags:
+        - System
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+components:
+  schemas:
+    SubscriptionRequest:
+      type: object
+      required:
+        - event_types
+        - endpoint_url
+      properties:
+        event_types:
+          type: array
+          items:
+            type: string
+          description: List of event types to subscribe to
+          example: ["user.created", "order.completed"]
+        endpoint_url:
+          type: string
+          format: uri
+          description: Webhook endpoint URL
+          example: "https://example.com/webhooks"
+        secret:
+          type: string
+          description: Secret for webhook signature verification
+          example: "whsec_1234567890"
+        retry_policy:
+          $ref: '#/components/schemas/RetryPolicy'
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventFilter'
+          description: Optional filters to apply to events
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Custom headers to include in webhook requests
+          example:
+            Authorization: "Bearer token123"
+            X-Custom-Header: "value"
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique subscription identifier
+          example: "sub_1234567890"
+        event_types:
+          type: array
+          items:
+            type: string
+          description: Subscribed event types
+        endpoint_url:
+          type: string
+          format: uri
+          description: Webhook endpoint URL
+        status:
+          type: string
+          enum: [active, paused, disabled]
+          description: Subscription status
+        retry_policy:
+          $ref: '#/components/schemas/RetryPolicy'
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventFilter'
+        created_at:
+          type: string
+          format: date-time
+          description: When subscription was created
+        updated_at:
+          type: string
+          format: date-time
+          description: When subscription was last updated
+        stats:
+          $ref: '#/components/schemas/SubscriptionStats'
+
+    SubscriptionsResponse:
+      type: object
+      properties:
+        subscriptions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubscriptionResponse'
+        total:
+          type: integer
+          description: Total number of subscriptions
+        limit:
+          type: integer
+          description: Maximum subscriptions returned
+        offset:
+          type: integer
+          description: Number of subscriptions skipped
+
+    EventTypesResponse:
+      type: object
+      properties:
+        event_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventType'
+
+    EventType:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Event type identifier
+          example: "user.created"
+        description:
+          type: string
+          description: Human-readable description
+          example: "Triggered when a new user is created"
+        category:
+          type: string
+          description: Event category
+          example: "user"
+        version:
+          type: string
+          description: Event schema version
+          example: "1.0"
+        schema:
+          type: object
+          description: JSON schema for event payload
+          additionalProperties: true
+
+    RetryPolicy:
+      type: object
+      properties:
+        max_attempts:
+          type: integer
+          description: Maximum number of retry attempts
+          default: 3
+          example: 5
+        strategy:
+          type: string
+          enum: [exponential, linear, fixed]
+          description: Retry strategy
+          default: exponential
+        initial_delay_ms:
+          type: integer
+          description: Initial delay before first retry (milliseconds)
+          default: 1000
+          example: 2000
+        max_delay_ms:
+          type: integer
+          description: Maximum delay between retries (milliseconds)
+          default: 60000
+          example: 30000
+        backoff_multiplier:
+          type: number
+          format: float
+          description: Multiplier for exponential backoff
+          default: 2.0
+          example: 1.5
+
+    EventFilter:
+      type: object
+      required:
+        - field
+        - operator
+      properties:
+        field:
+          type: string
+          description: Field path to filter on
+          example: "user.role"
+        operator:
+          type: string
+          enum: [equals, not_equals, in, not_in, contains, starts_with, ends_with]
+          description: Filter operator
+        value:
+          description: Filter value (type depends on operator)
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: array
+
+    SubscriptionStats:
+      type: object
+      properties:
+        total_webhooks:
+          type: integer
+          description: Total webhooks delivered
+        successful:
+          type: integer
+          description: Successfully delivered webhooks
+        failed:
+          type: integer
+          description: Failed webhook deliveries
+        pending:
+          type: integer
+          description: Pending webhook deliveries
+        last_delivery_at:
+          type: string
+          format: date-time
+          description: Timestamp of last webhook delivery
+
+    WebhookStatusResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Webhook identifier
+        subscription_id:
+          type: string
+          description: Associated subscription ID
+        event_type:
+          type: string
+          description: Event type that triggered this webhook
+        status:
+          type: string
+          enum: [pending, delivered, failed, retrying]
+          description: Delivery status
+        endpoint_url:
+          type: string
+          format: uri
+          description: Target endpoint URL
+        attempts:
+          type: integer
+          description: Number of delivery attempts
+        last_attempt_at:
+          type: string
+          format: date-time
+          description: Timestamp of last delivery attempt
+        next_retry_at:
+          type: string
+          format: date-time
+          description: When next retry will be attempted (if applicable)
+        error:
+          $ref: '#/components/schemas/WebhookError'
+        created_at:
+          type: string
+          format: date-time
+          description: When webhook was created
+
+    WebhookRetryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Webhook identifier
+        status:
+          type: string
+          description: New status after retry request
+        retry_scheduled_at:
+          type: string
+          format: date-time
+          description: When retry will be attempted
+
+    WebhookError:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Error code
+          example: "TIMEOUT"
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+        http_status:
+          type: integer
+          description: HTTP status code received (if any)
+          example: 500
+
+    EndpointsResponse:
+      type: object
+      properties:
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Endpoint'
+
+    Endpoint:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Endpoint URL
+        active_subscriptions:
+          type: integer
+          description: Number of active subscriptions using this endpoint
+        last_delivery_at:
+          type: string
+          format: date-time
+          description: Last successful delivery to this endpoint
+        health_status:
+          type: string
+          enum: [healthy, unhealthy, unknown]
+          description: Endpoint health status
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "SUBSCRIPTION_NOT_FOUND"
+            message:
+              type: string
+              example: "Subscription with ID sub_1234567890 not found"
+            details:
+              type: object
+              properties:
+                subscription_id:
+                  type: string
+                available_subscriptions:
+                  type: array
+                  items:
+                    type: string
+        timestamp:
+          type: string
+          format: date-time
+          description: When the error occurred
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          example: "1.0.0"
+        services:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            event_processor: "healthy"
+            webhook_delivery: "healthy"
+

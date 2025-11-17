@@ -72,7 +72,7 @@ public abstract class AbstractLlmClient implements LlmClient {
       log.trace("chat() took {} ms", System.currentTimeMillis() - start);
       StdoutUtility.printRollingLine(
           oneMcp,
-          "(Inference): completed in (%d)ms\n".formatted((System.currentTimeMillis() - start)));
+          "(Inference): completed in (%d)ms".formatted((System.currentTimeMillis() - start)));
     }
   }
 

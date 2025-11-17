@@ -1,0 +1,78 @@
+checksum: 1234567890
+slug: iot_device_management_api
+definitionUri: openapi/iot-device-management-api.yaml
+resourcesUri: .services/iot_device_management_api
+readmeUri: .services/iot_device_management_api/README.md
+operations:
+- documentationUri: .services/iot_device_management_api/listDevices.md
+  operation: listDevices
+  method: GET
+  path: /devices
+  summary: |
+    Retrieve a paginated list of all registered IoT devices with optional filtering by group, status, or firmware version.
+- documentationUri: .services/iot_device_management_api/registerDevice.md
+  operation: registerDevice
+  method: POST
+  path: /devices
+  summary: |
+    Register a new IoT device in the system. Requires device ID, name, and device type.
+- documentationUri: .services/iot_device_management_api/getDevice.md
+  operation: getDevice
+  method: GET
+  path: /devices/{device_id}
+  summary: |
+    Retrieve detailed information about a specific device including sensor list and status.
+- documentationUri: .services/iot_device_management_api/updateDeviceStatus.md
+  operation: updateDeviceStatus
+  method: PATCH
+  path: /devices/{device_id}
+  summary: |
+    Update device connectivity status or put device in maintenance mode.
+- documentationUri: .services/iot_device_management_api/listDeviceSensors.md
+  operation: listDeviceSensors
+  method: GET
+  path: /devices/{device_id}/sensors
+  summary: |
+    Retrieve all sensors attached to a specific device with optional filtering by sensor type.
+- documentationUri: .services/iot_device_management_api/addSensor.md
+  operation: addSensor
+  method: POST
+  path: /devices/{device_id}/sensors
+  summary: |
+    Register a new sensor on an existing device. Requires sensor ID, type, and unit.
+- documentationUri: .services/iot_device_management_api/queryTelemetry.md
+  operation: queryTelemetry
+  method: GET
+  path: /telemetry/{sensor_id}
+  summary: |
+    Retrieve time-series telemetry data from a sensor with optional aggregation and interval filtering.
+- documentationUri: .services/iot_device_management_api/listAlerts.md
+  operation: listAlerts
+  method: GET
+  path: /alerts
+  summary: |
+    Retrieve all active alerts with optional filtering by device, severity, or status.
+- documentationUri: .services/iot_device_management_api/createAlertRule.md
+  operation: createAlertRule
+  method: POST
+  path: /alerts
+  summary: |
+    Define a threshold-based alert rule for a sensor. Supports multiple condition types and severity levels.
+- documentationUri: .services/iot_device_management_api/listGroups.md
+  operation: listGroups
+  method: GET
+  path: /groups
+  summary: |
+    Retrieve all device groups with hierarchy information. Supports filtering by parent group.
+- documentationUri: .services/iot_device_management_api/createGroup.md
+  operation: createGroup
+  method: POST
+  path: /groups
+  summary: |
+    Create a new device group, optionally as a child of another group for hierarchical organization.
+- documentationUri: .services/iot_device_management_api/healthCheck.md
+  operation: healthCheck
+  method: GET
+  path: /health
+  summary: Check the health status of the API including connected devices and active alerts
+
