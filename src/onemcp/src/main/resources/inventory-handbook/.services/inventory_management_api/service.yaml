@@ -1,0 +1,57 @@
+checksum: 1234567890
+slug: inventory_management_api
+definitionUri: openapi/inventory-management-api.yaml
+resourcesUri: .services/inventory_management_api
+readmeUri: .services/inventory_management_api/README.md
+operations:
+- documentationUri: .services/inventory_management_api/listItems.md
+  operation: listItems
+  method: GET
+  path: /items
+  summary: |
+    List all inventory items with optional filtering by warehouse, category, or low stock status.
+    Supports pagination for large result sets.
+- documentationUri: .services/inventory_management_api/createItem.md
+  operation: createItem
+  method: POST
+  path: /items
+  summary: |
+    Create a new inventory item in the catalog. Requires SKU, name, and category.
+    Optionally set pricing and reorder points.
+- documentationUri: .services/inventory_management_api/getItem.md
+  operation: getItem
+  method: GET
+  path: /items/{item_id}
+  summary: |
+    Retrieve detailed information about a specific inventory item by SKU.
+- documentationUri: .services/inventory_management_api/updateItem.md
+  operation: updateItem
+  method: PUT
+  path: /items/{item_id}
+  summary: |
+    Update details of an existing inventory item. All fields are optional.
+- documentationUri: .services/inventory_management_api/listWarehouses.md
+  operation: listWarehouses
+  method: GET
+  path: /warehouses
+  summary: |
+    Retrieve a list of all warehouse locations with capacity and occupancy information.
+- documentationUri: .services/inventory_management_api/getStockLevel.md
+  operation: getStockLevel
+  method: GET
+  path: /stock/{item_id}
+  summary: |
+    Get current stock levels for an item across all warehouses or a specific warehouse.
+- documentationUri: .services/inventory_management_api/createMovement.md
+  operation: createMovement
+  method: POST
+  path: /movements
+  summary: |
+    Create an inventory movement (transfer, adjustment, receipt, or shipment).
+    Records inventory changes between warehouses or within a warehouse.
+- documentationUri: .services/inventory_management_api/healthCheck.md
+  operation: healthCheck
+  method: GET
+  path: /health
+  summary: Check the health status of the API
+

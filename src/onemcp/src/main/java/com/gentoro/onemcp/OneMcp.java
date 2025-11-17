@@ -64,6 +64,21 @@ public class OneMcp {
     Logger.getLogger("").setLevel(Level.OFF);
 
     this.configurationProvider = new ConfigurationProvider(startupParameters.configFile());
+    
+    // Override handbook.location if --handbook parameter is provided
+    String handbookParam = startupParameters().getOptionalParameter("handbook", String.class).orElse(null);
+    if (handbookParam != null && !handbookParam.isBlank()) {
+      String handbookLocation = resolveHandbookLocation(handbookParam);
+      configuration().setProperty("handbook.location", handbookLocation);
+      log.info("Handbook selected via --handbook parameter: {}", handbookLocation);
+    } else {
+      // Check environment variable as fallback
+      String envHandbook = System.getenv("HANDBOOK_DIR");
+      if (envHandbook != null && !envHandbook.isBlank()) {
+        log.info("Handbook selected via HANDBOOK_DIR environment variable: {}", envHandbook);
+      }
+    }
+    
     // Apply logging levels from application.yaml as early as possible
     com.gentoro.onemcp.logging.LoggingService.applyConfiguration(configuration());
     this.promptRepository = PromptRepositoryFactory.create(this);
@@ -207,6 +222,39 @@ public class OneMcp {
 
   public OrchestratorService orchestrator() {
     return orchestrator;
+  }
+
+  /**
+   * Resolve handbook location from a handbook name or path.
+   * Supports:
+   * - Full classpath paths: "classpath:acme-handbook"
+   * - Handbook names: "acme-handbook" -> "classpath:acme-handbook"
+   * - Absolute filesystem paths: "/path/to/handbook"
+   * - Relative filesystem paths: "./handbook" or "../handbook"
+   *
+   * @param handbookInput handbook name or path
+   * @return resolved handbook location string
+   */
+  private String resolveHandbookLocation(String handbookInput) {
+    if (handbookInput == null || handbookInput.isBlank()) {
+      return null;
+    }
+    
+    String trimmed = handbookInput.trim();
+    
+    // If it's already a full path (classpath: or absolute/relative filesystem path), use as-is
+    if (trimmed.startsWith("classpath:") || 
+        trimmed.startsWith("/") || 
+        trimmed.startsWith("./") || 
+        trimmed.startsWith("../") ||
+        (trimmed.length() > 1 && trimmed.charAt(1) == ':')) { // Windows drive letter (C:, D:, etc.)
+      return trimmed;
+    }
+    
+    // Otherwise, treat as a handbook name and resolve to classpath
+    // Remove any trailing slashes
+    String handbookName = trimmed.replaceAll("/+$", "");
+    return "classpath:" + handbookName;
   }
 
   /**

@@ -1,0 +1,598 @@
+openapi: 3.0.3
+info:
+  title: Inventory Management API
+  description: |
+    A comprehensive API for managing inventory, warehouses, and stock levels.
+    This API provides operations to track items, manage warehouses, monitor stock levels,
+    and handle inventory movements.
+    
+    ## Key Features
+    - **Item Management**: Create, update, and query inventory items
+    - **Warehouse Operations**: Manage multiple warehouse locations
+    - **Stock Tracking**: Real-time stock level monitoring
+    - **Movement Tracking**: Track inventory transfers and adjustments
+    
+    ## Core Entities
+    - **Items**: Product catalog with SKUs, descriptions, and pricing
+    - **Warehouses**: Storage locations with capacity and address
+    - **Stock**: Current inventory levels per item per warehouse
+    - **Movements**: Inventory transfers and adjustments
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/inventory
+    description: Production server
+tags:
+  - name: Items
+    description: Item management operations
+  - name: Warehouses
+    description: Warehouse management operations
+  - name: Stock
+    description: Stock level operations
+  - name: Movements
+    description: Inventory movement operations
+  - name: System
+    description: System operations
+
+paths:
+  /items:
+    get:
+      operationId: listItems
+      summary: List all inventory items
+      description: Retrieve a paginated list of all inventory items with optional filtering
+      tags:
+        - Items
+      parameters:
+        - name: warehouse_id
+          in: query
+          description: Filter items by warehouse
+          required: false
+          schema:
+            type: string
+        - name: category
+          in: query
+          description: Filter items by category
+          required: false
+          schema:
+            type: string
+        - name: low_stock
+          in: query
+          description: Show only items with low stock
+          required: false
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          required: false
+          schema:
+            type: integer
+            default: 100
+        - name: offset
+          in: query
+          description: Number of items to skip
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of items retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemsResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    post:
+      operationId: createItem
+      summary: Create a new inventory item
+      description: Add a new item to the inventory catalog
+      tags:
+        - Items
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemRequest'
+      responses:
+        '201':
+          description: Item created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+        '400':
+          description: Invalid item data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /items/{item_id}:
+    get:
+      operationId: getItem
+      summary: Get item details
+      description: Retrieve detailed information about a specific item
+      tags:
+        - Items
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          description: Unique item identifier (SKU)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Item details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+        '404':
+          description: Item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    put:
+      operationId: updateItem
+      summary: Update an inventory item
+      description: Update details of an existing inventory item
+      tags:
+        - Items
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          description: Unique item identifier (SKU)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemUpdateRequest'
+      responses:
+        '200':
+          description: Item updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponse'
+        '400':
+          description: Invalid item data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /warehouses:
+    get:
+      operationId: listWarehouses
+      summary: List all warehouses
+      description: Retrieve a list of all warehouse locations
+      tags:
+        - Warehouses
+      responses:
+        '200':
+          description: List of warehouses retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarehousesResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /stock/{item_id}:
+    get:
+      operationId: getStockLevel
+      summary: Get stock level for an item
+      description: Retrieve current stock levels for an item across all warehouses
+      tags:
+        - Stock
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          description: Unique item identifier (SKU)
+          schema:
+            type: string
+        - name: warehouse_id
+          in: query
+          description: Filter by specific warehouse
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Stock levels retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockResponse'
+        '404':
+          description: Item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /movements:
+    post:
+      operationId: createMovement
+      summary: Create an inventory movement
+      description: Record an inventory transfer or adjustment between warehouses
+      tags:
+        - Movements
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MovementRequest'
+      responses:
+        '201':
+          description: Movement created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MovementResponse'
+        '400':
+          description: Invalid movement data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      description: Check the health status of the API
+      tags:
+        - System
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+components:
+  schemas:
+    ItemRequest:
+      type: object
+      required:
+        - sku
+        - name
+        - category
+      properties:
+        sku:
+          type: string
+          description: Stock Keeping Unit (unique identifier)
+          example: "SKU-001"
+        name:
+          type: string
+          description: Item name
+          example: "Wireless Mouse"
+        description:
+          type: string
+          description: Item description
+          example: "Ergonomic wireless mouse with USB receiver"
+        category:
+          type: string
+          description: Item category
+          example: "Electronics"
+        unit_price:
+          type: number
+          format: float
+          description: Unit price in USD
+          example: 29.99
+        reorder_point:
+          type: integer
+          description: Minimum stock level before reorder
+          example: 50
+        reorder_quantity:
+          type: integer
+          description: Quantity to order when reorder point is reached
+          example: 200
+
+    ItemUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Item name
+        description:
+          type: string
+          description: Item description
+        category:
+          type: string
+          description: Item category
+        unit_price:
+          type: number
+          format: float
+          description: Unit price in USD
+        reorder_point:
+          type: integer
+          description: Minimum stock level before reorder
+        reorder_quantity:
+          type: integer
+          description: Quantity to order when reorder point is reached
+
+    ItemResponse:
+      type: object
+      properties:
+        sku:
+          type: string
+          description: Stock Keeping Unit
+          example: "SKU-001"
+        name:
+          type: string
+          description: Item name
+          example: "Wireless Mouse"
+        description:
+          type: string
+          description: Item description
+        category:
+          type: string
+          description: Item category
+        unit_price:
+          type: number
+          format: float
+          description: Unit price in USD
+        reorder_point:
+          type: integer
+          description: Minimum stock level before reorder
+        reorder_quantity:
+          type: integer
+          description: Quantity to order when reorder point is reached
+        created_at:
+          type: string
+          format: date-time
+          description: When the item was created
+        updated_at:
+          type: string
+          format: date-time
+          description: When the item was last updated
+
+    ItemsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ItemResponse'
+        total:
+          type: integer
+          description: Total number of items
+        limit:
+          type: integer
+          description: Maximum items returned
+        offset:
+          type: integer
+          description: Number of items skipped
+
+    Warehouse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique warehouse identifier
+          example: "WH-001"
+        name:
+          type: string
+          description: Warehouse name
+          example: "Main Warehouse"
+        address:
+          type: string
+          description: Warehouse address
+          example: "123 Main St, City, State 12345"
+        capacity:
+          type: integer
+          description: Maximum storage capacity
+          example: 10000
+        current_occupancy:
+          type: integer
+          description: Current items stored
+          example: 7500
+
+    WarehousesResponse:
+      type: object
+      properties:
+        warehouses:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warehouse'
+
+    StockLevel:
+      type: object
+      properties:
+        item_id:
+          type: string
+          description: Item SKU
+        warehouse_id:
+          type: string
+          description: Warehouse identifier
+        quantity:
+          type: integer
+          description: Current stock quantity
+        reserved:
+          type: integer
+          description: Reserved quantity (pending orders)
+        available:
+          type: integer
+          description: Available quantity (quantity - reserved)
+        last_updated:
+          type: string
+          format: date-time
+          description: When stock was last updated
+
+    StockResponse:
+      type: object
+      properties:
+        item_id:
+          type: string
+          description: Item SKU
+        stock_levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockLevel'
+        total_quantity:
+          type: integer
+          description: Total quantity across all warehouses
+
+    MovementRequest:
+      type: object
+      required:
+        - item_id
+        - movement_type
+        - quantity
+      properties:
+        item_id:
+          type: string
+          description: Item SKU
+        movement_type:
+          type: string
+          enum: [transfer, adjustment, receipt, shipment]
+          description: Type of movement
+        from_warehouse_id:
+          type: string
+          description: Source warehouse (for transfers)
+        to_warehouse_id:
+          type: string
+          description: Destination warehouse (for transfers)
+        warehouse_id:
+          type: string
+          description: Warehouse for adjustments, receipts, shipments
+        quantity:
+          type: integer
+          description: Quantity moved
+        reason:
+          type: string
+          description: Reason for movement
+          example: "Stock adjustment for damaged items"
+
+    MovementResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Movement identifier
+        item_id:
+          type: string
+          description: Item SKU
+        movement_type:
+          type: string
+          description: Type of movement
+        quantity:
+          type: integer
+          description: Quantity moved
+        from_warehouse_id:
+          type: string
+          description: Source warehouse
+        to_warehouse_id:
+          type: string
+          description: Destination warehouse
+        warehouse_id:
+          type: string
+          description: Warehouse for non-transfer movements
+        reason:
+          type: string
+          description: Reason for movement
+        created_at:
+          type: string
+          format: date-time
+          description: When movement was created
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "ITEM_NOT_FOUND"
+            message:
+              type: string
+              example: "Item with SKU SKU-001 not found"
+            details:
+              type: object
+        timestamp:
+          type: string
+          format: date-time
+          description: When the error occurred
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          example: "1.0.0"
+
