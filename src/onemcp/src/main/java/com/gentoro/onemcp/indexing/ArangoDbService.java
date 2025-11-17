@@ -340,8 +340,26 @@ public class ArangoDbService {
       String fromCollection = determineCollectionFromKey(sanitizedFromKey);
       String toCollection = determineCollectionFromKey(sanitizedToKey);
       
-      edgeData.put("_from", fromCollection + "/" + sanitizedFromKey);
-      edgeData.put("_to", toCollection + "/" + sanitizedToKey);
+      String fromRef = fromCollection + "/" + sanitizedFromKey;
+      String toRef = toCollection + "/" + sanitizedToKey;
+      
+      edgeData.put("_from", fromRef);
+      edgeData.put("_to", toRef);
+      
+      // Validate that referenced documents exist before creating edge
+      if (!documentExists(fromCollection, sanitizedFromKey)) {
+        log.warn("Source document does not exist for edge: {} (collection: {}, key: {})", 
+            edge.getFromKey(), fromCollection, sanitizedFromKey);
+        // Don't throw - just skip this edge to prevent graph corruption
+        return;
+      }
+      
+      if (!documentExists(toCollection, sanitizedToKey)) {
+        log.warn("Target document does not exist for edge: {} (collection: {}, key: {})", 
+            edge.getToKey(), toCollection, sanitizedToKey);
+        // Don't throw - just skip this edge to prevent graph corruption
+        return;
+      }
 
       // Use upsert to handle duplicate edges gracefully (insert or update if exists)
       try {
@@ -357,8 +375,9 @@ public class ArangoDbService {
         }
       }
     } catch (Exception e) {
-      throw new IoException(
-          "Failed to store edge: " + edge.getFromKey() + " -> " + edge.getToKey(), e);
+      log.error("Failed to store edge: {} -> {}, skipping to prevent graph corruption", 
+          edge.getFromKey(), edge.getToKey(), e);
+      // Don't throw - log and continue to prevent partial graph corruption
     }
   }
 
@@ -381,6 +400,22 @@ public class ArangoDbService {
   }
 
   /**
+   * Check if a document exists in a collection.
+   *
+   * @param collection the collection name
+   * @param key the document key
+   * @return true if the document exists, false otherwise
+   */
+  private boolean documentExists(String collection, String key) {
+    try {
+      return database.collection(collection).documentExists(key);
+    } catch (Exception e) {
+      log.debug("Error checking if document exists: {}/{}", collection, key, e);
+      return false;
+    }
+  }
+
+  /**
    * Get the collection name for a given node type.
    *
    * @param nodeType the node type
@@ -398,8 +433,9 @@ public class ArangoDbService {
 
   /**
    * Determine the collection from a node key prefix.
+   * Handles both original (with |) and sanitized (with _) key formats.
    *
-   * @param key the node key
+   * @param key the node key (may be original or sanitized)
    * @return collection name
    */
   private String determineCollectionFromKey(String key) {
@@ -409,7 +445,8 @@ public class ArangoDbService {
     if (key.startsWith("example|") || key.startsWith("example_")) return EXAMPLES_COLLECTION;
     if (key.startsWith("field|") || key.startsWith("field_")) return FIELDS_COLLECTION;
     
-    // Default to entities for backward compatibility
+    // Log warning for unknown key format
+    log.warn("Could not determine collection for key: {}, defaulting to {}", key, ENTITIES_COLLECTION);
     return ENTITIES_COLLECTION;
   }
 

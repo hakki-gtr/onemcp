@@ -686,7 +686,10 @@ public class GraphIndexingService {
       // Create timestamp-based filename for error log
       String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
       String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename = String.format("llm-parse-error-%s-%s.log", timestamp, sanitizedServiceSlug);
+      String filename =
+          String.format(
+              "%s-llm-parse-error-%s-%s.log",
+              sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
       File errorLogFile = new File(logsDir, filename);
       
       try (FileWriter writer = new FileWriter(errorLogFile, false)) {
@@ -906,7 +909,9 @@ public class GraphIndexingService {
       // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
       String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
       String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename = String.format("llm-prompt-%s-%s.log", timestamp, sanitizedServiceSlug);
+      String filename =
+          String.format(
+              "%s-llm-prompt-%s-%s.log", sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
       File logFile = new File(logsDir, filename);
       
       try (FileWriter writer = new FileWriter(logFile, false)) {
@@ -954,7 +959,9 @@ public class GraphIndexingService {
       // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
       String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
       String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename = String.format("llm-graph-%s-%s.log", timestamp, sanitizedServiceSlug);
+      String filename =
+          String.format(
+              "%s-llm-graph-%s-%s.log", sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
       File logFile = new File(logsDir, filename);
       
       try (FileWriter writer = new FileWriter(logFile, false)) {
@@ -1050,7 +1057,9 @@ public class GraphIndexingService {
       // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
       String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
       String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename = String.format("llm-response-%s-%s.log", timestamp, sanitizedServiceSlug);
+      String filename =
+          String.format(
+              "%s-llm-response-%s-%s.log", sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
       File logFile = new File(logsDir, filename);
       
       try (FileWriter writer = new FileWriter(logFile, false)) {
@@ -1090,6 +1099,21 @@ public class GraphIndexingService {
     if (arangoDbService != null) {
       arangoDbService.shutdown();
     }
+  }
+
+  private String sanitizedHandbookName() {
+    String name = handbookName;
+    if (name == null || name.isBlank()) {
+      try {
+        name = oneMcp.knowledgeBase().getHandbookName();
+      } catch (Exception ignored) {
+        // ignore
+      }
+    }
+    if (name == null || name.isBlank()) {
+      name = "unknown_handbook";
+    }
+    return name.replaceAll("[^a-zA-Z0-9_-]", "_").toLowerCase();
   }
 
 }
