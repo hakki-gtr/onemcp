@@ -74,10 +74,19 @@ public class KnowledgeBase {
    *     required resources
    */
   public void ingestHandbook() throws IOException {
+    ingestHandbook(false);
+  }
+
+  public void ingestHandbook(boolean skipGraphIndexing) throws IOException {
     processOpenApiDefinitions();
     loadDocuments();
     validateHandbookStructure();
     
+    if (skipGraphIndexing) {
+      log.info("Skipping graph indexing per startup parameter");
+      return;
+    }
+
     // Build graph representation in ArangoDB
     try {
       log.info("Starting graph indexing of handbook");

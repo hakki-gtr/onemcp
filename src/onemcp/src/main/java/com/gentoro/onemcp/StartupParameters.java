@@ -11,6 +11,7 @@ public class StartupParameters {
   {
     parameters.put("config-file", "classpath:application.yaml");
     parameters.put("mode", "interactive"); // interactive, dry-run, server, help
+    parameters.put("skip-kb-reindex", "false");
   }
 
   public StartupParameters(String[] arguments) {
@@ -27,11 +28,13 @@ public class StartupParameters {
       }
 
       String paramName = arguments[p].substring(2);
-      String paramValue = null;
-
+      String paramValue = "true";
       if (p < arguments.length - 1) {
-        paramValue = arguments[p + 1];
-        p++;
+        String next = arguments[p + 1];
+        if (!next.startsWith("--")) {
+          paramValue = next;
+          p++;
+        }
       }
 
       result.put(paramName, paramValue);
@@ -74,5 +77,22 @@ public class StartupParameters {
 
   public boolean isParameterPresent(String name) {
     return parameters.containsKey(name);
+  }
+
+  public boolean getBooleanParameter(String name, boolean defaultValue) {
+    return getOptionalParameter(name, String.class)
+        .map(String::trim)
+        .map(String::toLowerCase)
+        .map(
+            value -> {
+              if (value.equals("true") || value.equals("1") || value.equals("yes") || value.equals("y")) {
+                return true;
+              }
+              if (value.equals("false") || value.equals("0") || value.equals("no") || value.equals("n")) {
+                return false;
+              }
+              return defaultValue;
+            })
+        .orElse(defaultValue);
   }
 }

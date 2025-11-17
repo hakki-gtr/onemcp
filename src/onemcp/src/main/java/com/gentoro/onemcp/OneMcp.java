@@ -71,9 +71,13 @@ public class OneMcp {
     // Initialize LLM client
     this.llmClient = LlmClientFactory.createProvider(this);
 
+    boolean skipKbReindex = startupParameters().getBooleanParameter("skip-kb-reindex", false);
+    if (skipKbReindex) {
+      log.info("Startup parameter --skip-kb-reindex detected; handbook graph reindex will be skipped.");
+    }
     try {
       this.knowledgeBase = new KnowledgeBase(this);
-      this.knowledgeBase.ingestHandbook();
+      this.knowledgeBase.ingestHandbook(skipKbReindex);
     } catch (Exception e) {
       throw new KnowledgeBaseException("Failed to ingest Handbook content", e);
     }
