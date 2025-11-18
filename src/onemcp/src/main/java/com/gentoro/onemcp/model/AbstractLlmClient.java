@@ -70,7 +70,7 @@ public abstract class AbstractLlmClient implements LlmClient {
                   "There was a problem while running the inference with the chosen model.", ex));
     } finally {
       log.trace("chat() took {} ms", System.currentTimeMillis() - start);
-      StdoutUtility.printRollingLine(
+      StdoutUtility.printNewLine(
           oneMcp,
           "(Inference): completed in (%d)ms".formatted((System.currentTimeMillis() - start)));
     }

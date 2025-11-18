@@ -26,6 +26,7 @@ public class OperationNode implements GraphNode {
   private final String responseSchema;
   private final List<String> examples;
   private final String category;
+  private final String primaryEntity;
 
   public OperationNode(
       String key,
@@ -39,7 +40,7 @@ public class OperationNode implements GraphNode {
       String signature,
       List<String> exampleKeys,
       String documentationUri) {
-    this(key, operationId, method, path, summary, description, serviceSlug, tags, signature, exampleKeys, documentationUri, null, null, null, null);
+    this(key, operationId, method, path, summary, description, serviceSlug, tags, signature, exampleKeys, documentationUri, null, null, null, null, null);
   }
 
   public OperationNode(
@@ -57,7 +58,7 @@ public class OperationNode implements GraphNode {
       String requestSchema,
       String responseSchema,
       List<String> examples) {
-    this(key, operationId, method, path, summary, description, serviceSlug, tags, signature, exampleKeys, documentationUri, requestSchema, responseSchema, examples, null);
+    this(key, operationId, method, path, summary, description, serviceSlug, tags, signature, exampleKeys, documentationUri, requestSchema, responseSchema, examples, null, null);
   }
 
   public OperationNode(
@@ -75,7 +76,8 @@ public class OperationNode implements GraphNode {
       String requestSchema,
       String responseSchema,
       List<String> examples,
-      String category) {
+      String category,
+      String primaryEntity) {
     this.key = key;
     this.operationId = operationId;
     this.method = method;
@@ -91,6 +93,7 @@ public class OperationNode implements GraphNode {
     this.responseSchema = responseSchema;
     this.examples = examples;
     this.category = category;
+    this.primaryEntity = primaryEntity;
   }
 
   @Override
@@ -159,6 +162,10 @@ public class OperationNode implements GraphNode {
     return category;
   }
 
+  public String getPrimaryEntity() {
+    return primaryEntity;
+  }
+
   @Override
   public Map<String, Object> toMap() {
     Map<String, Object> map = new HashMap<>();
@@ -182,6 +189,7 @@ public class OperationNode implements GraphNode {
     if (responseSchema != null) map.put("responseSchema", responseSchema);
     if (examples != null) map.put("examples", examples);
     if (category != null) map.put("category", category);
+    if (primaryEntity != null) map.put("primaryEntity", primaryEntity);
     return map;
   }
 }

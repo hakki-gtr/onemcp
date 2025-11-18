@@ -1,0 +1,104 @@
+activations:
+  - role: system
+    activation: api-extraction
+    content: |
+      Extract entities, fields, operations, examples, documentations, and relationships from API docs.
+      
+      CRITICAL: Every operation MUST connect to its primaryEntity via SUPPORTS_{CATEGORY} edge.
+      Goal: Enable "{Category} operations for {Entity}" queries via entity→operation edges.
+
+  - role: user
+    activation: api-extraction
+    content: |
+      {% if instructions_content is not empty %}## Instructions
+      ```
+      {{ instructions_content | raw }}
+      ```
+      {% endif %}
+      {% if openapi_files is not empty %}
+      {% for openapi_file in openapi_files %}## OpenAPI: {{ openapi_file.name }}
+      ```yaml
+      {{ openapi_file.content | raw }}
+      ```
+      {% endfor %}
+      {% endif %}
+      {% if docs_files is not empty %}## Documentation
+      {% for doc_file in docs_files %}**{{ doc_file.name }}**
+      ```
+      {{ doc_file.content | raw }}
+      ```
+      {% endfor %}
+      {% endif %}
+
+  - role: user
+    activation: api-extraction
+    content: |
+      Extract and output as JSON:
+
+      **1. Entities** (from tags/schemas/docs - merge sources)
+      ```json
+      {"key": "entity|Name", "name": "Name", "description": "Business purpose, characteristics, relationships", "serviceSlug": "...", "attributes": [...], "domain": "..."}
+      ```
+
+      **2. Fields** (8-20 key fields per entity)
+      ```json
+      {"key": "field|Entity_field", "name": "field", "description": "Purpose, type details, constraints, allowed values, rules", "fieldType": "string|number|date|boolean|array|object", "entityKey": "entity|Entity", "serviceSlug": "...", "source": "schema|documentation"}
+      ```
+
+      **3. Operations** (CRITICAL: Extract each operation ONCE, share via edges)
+      ```json
+      {"key": "op|opId", "operationId": "opId", "method": "GET|POST|PUT|PATCH|DELETE", "path": "/path", "summary": "...", "description": "What it does, parameters, response, rules, edge cases", "category": "Retrieve|Create|Update|Delete|Compute", "primaryEntity": "EntityName", "serviceSlug": "...", "tags": ["EntityName"], "requestSchema": "...", "responseSchema": "..."}
+      ```
+      ⚠️ CRITICAL: Each operation appears ONCE in operations[]. Multiple entities can reference the same operation via relationships[].
+      Categories: Retrieve=GET/queries, Create=POST, Update=PUT/PATCH, Delete=DELETE, Compute=aggregations/analytics
+      primaryEntity: Extract from tags[0] → path → operationId. MUST match an entity name exactly.
+
+      **4. Examples** (2-5 per operation)
+      ```json
+      {"key": "example|op_scenario", "name": "...", "summary": "...", "description": "When/why to use", "requestBody": "...", "responseBody": "...", "responseStatus": "200", "operationKey": "op|...", "serviceSlug": "..."}
+      ```
+
+      **5. Documentations** (extract rich docs for entities/operations from OpenAPI + markdown docs)
+      ```json
+      {"key": "doc|entity_Order_overview", "title": "Order Entity Overview", "content": "Full documentation text...", "docType": "entity_description|operation_guide|field_reference|concept|example_explanation", "sourceFile": "data-model.md", "relatedKeys": ["entity|Order"], "serviceSlug": "...", "metadata": {"section": "..."}}
+      ```
+      docType: entity_description, operation_guide, field_reference, concept, example_explanation
+      Extract comprehensive documentation chunks from docs/ files and OpenAPI descriptions. Link via relatedKeys.
+
+      **6. Relationships** (MANDATORY - this is how operations are shared!)
+      ⚠️ CRITICAL: Operations are shared via edges. If an operation involves multiple entities, create edges from ALL relevant entities to the SAME operation node.
+      
+      For EVERY operation, create edge(s) from entity/entities to operation:
+      - Primary Entity→Operation: `{"fromKey": "entity|{primaryEntity}", "toKey": "op|{opId}", "edgeType": "SUPPORTS_{CATEGORY}"}`
+      - Additional Entities→Operation: If operation involves other entities (e.g., relates Order to Customer), create additional edges from those entities to the same operation
+        Use: SUPPORTS_RETRIEVE, SUPPORTS_CREATE, SUPPORTS_UPDATE, SUPPORTS_DELETE, SUPPORTS_COMPUTE
+      
+      For EVERY entity, create:
+      - Entity→Field: `{"fromKey": "entity|X", "toKey": "field|X_Y", "edgeType": "HAS_FIELD"}`
+      
+      Optional:
+      - Operation→Example: `{"fromKey": "op|X", "toKey": "example|X_Y", "edgeType": "HAS_EXAMPLE"}`
+      - Entity/Operation→Documentation: `{"fromKey": "entity|X", "toKey": "doc|Y", "edgeType": "HAS_DOCUMENTATION"}`
+
+      Example: Operation shared across entities
+      ```json
+      {
+        "entities": [
+          {"key": "entity|Order", "name": "Order", ...},
+          {"key": "entity|Customer", "name": "Customer", ...}
+        ],
+        "operations": [
+          {"key": "op|getOrdersByCustomer", "operationId": "getOrdersByCustomer", "primaryEntity": "Order", ...}
+        ],
+        "relationships": [
+          {"fromKey": "entity|Order", "toKey": "op|getOrdersByCustomer", "edgeType": "SUPPORTS_RETRIEVE"},
+          {"fromKey": "entity|Customer", "toKey": "op|getOrdersByCustomer", "edgeType": "SUPPORTS_RETRIEVE"}
+        ]
+      }
+      ```
+      Note: Same operation "op|getOrdersByCustomer" appears ONCE, but TWO edges connect it to both Order and Customer entities.
+
+      Output:
+      ```json
+      {"entities": [...], "fields": [...], "operations": [...], "examples": [...], "documentations": [...], "relationships": [...]}
+      ```

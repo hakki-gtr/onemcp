@@ -11,7 +11,6 @@ import com.gentoro.onemcp.exception.IoException;
 import com.gentoro.onemcp.indexing.graph.GraphEdge;
 import com.gentoro.onemcp.indexing.graph.nodes.GraphNode;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -25,6 +24,10 @@ import java.util.Map;
  * edges (relationships) in ArangoDB. It supports multiple node types (entities, operations,
  * examples) and various relationship types.
  *
+ * <p>Each handbook gets its own dedicated ArangoDB database (named: onemcp_{handbook_name}),
+ * ensuring complete isolation between different handbooks. This allows multiple handbooks to be
+ * indexed on the same ArangoDB instance without data conflicts.
+ *
  * <p>The graph structure enables semantic querying and retrieval based on relationships between
  * different knowledge base elements.
  */
@@ -32,19 +35,21 @@ public class ArangoDbService {
   private static final org.slf4j.Logger log =
       com.gentoro.onemcp.logging.LoggingService.getLogger(ArangoDbService.class);
 
-  private static final String DEFAULT_DATABASE = "onemcp_kb";
+  private static final String DATABASE_PREFIX = "onemcp_";
   
   // Collection names for different node types
   private static final String ENTITIES_COLLECTION = "entities";
   private static final String OPERATIONS_COLLECTION = "operations";
   private static final String EXAMPLES_COLLECTION = "examples";
   private static final String FIELDS_COLLECTION = "fields";
+  private static final String DOCUMENTATIONS_COLLECTION = "documentations";
   
   // Edge collections for different relationship types
   private static final String EDGES_COLLECTION = "edges";
 
   private final OneMcp oneMcp;
   private final String handbookName;
+  private final String databaseName;
   private ArangoDB arangoDB;
   private ArangoDatabase database;
   private boolean initialized = false;
@@ -58,6 +63,49 @@ public class ArangoDbService {
   public ArangoDbService(OneMcp oneMcp, String handbookName) {
     this.oneMcp = oneMcp;
     this.handbookName = handbookName;
+    this.databaseName = deriveDatabaseName(handbookName);
+  }
+
+  /**
+   * Derive a database name from the handbook name.
+   * Creates a unique database name per handbook: onemcp_{sanitized_handbook_name}
+   *
+   * @param handbookName the handbook name
+   * @return sanitized database name
+   */
+  private String deriveDatabaseName(String handbookName) {
+    if (handbookName == null || handbookName.trim().isEmpty()) {
+      log.warn("Handbook name is null or empty, using default database name");
+      return DATABASE_PREFIX + "default";
+    }
+    
+    String sanitized = sanitizeDatabaseName(handbookName);
+    return DATABASE_PREFIX + sanitized;
+  }
+
+  /**
+   * Sanitize a database name to be valid for ArangoDB.
+   * ArangoDB database names: a-z, A-Z, 0-9, _, -, must start with letter
+   *
+   * @param name the name to sanitize
+   * @return sanitized database name
+   */
+  private String sanitizeDatabaseName(String name) {
+    // ArangoDB database names: alphanumeric, underscore, hyphen
+    // Must start with letter
+    String sanitized = name.replaceAll("[^a-zA-Z0-9_\\-]", "_").toLowerCase();
+    
+    // Ensure it starts with a letter
+    if (!sanitized.matches("^[a-zA-Z].*")) {
+      sanitized = "handbook_" + sanitized;
+    }
+    
+    // Limit length (ArangoDB has reasonable limits, but be safe)
+    if (sanitized.length() > 64) {
+      sanitized = sanitized.substring(0, 64);
+    }
+    
+    return sanitized;
   }
 
   /**
@@ -76,7 +124,6 @@ public class ArangoDbService {
     Integer port = oneMcp.configuration().getInteger("arangodb.port", 8529);
     String user = oneMcp.configuration().getString("arangodb.user", "root");
     String password = oneMcp.configuration().getString("arangodb.password", "");
-    String databaseName = oneMcp.configuration().getString("arangodb.database", DEFAULT_DATABASE);
     Boolean enabled = oneMcp.configuration().getBoolean("arangodb.enabled", false);
 
     if (!enabled) {
@@ -84,15 +131,18 @@ public class ArangoDbService {
       return;
     }
 
-    log.info("Initializing ArangoDB connection: {}:{}", host, port);
+    log.info("Initializing ArangoDB connection: {}:{} for handbook: {} (database: {})", 
+        host, port, handbookName, databaseName);
 
     try {
       arangoDB = new ArangoDB.Builder().host(host, port).user(user).password(password).build();
 
-      // Create database if it doesn't exist
+      // Create handbook-specific database if it doesn't exist
       if (!arangoDB.getDatabases().contains(databaseName)) {
-        log.info("Creating ArangoDB database: {}", databaseName);
+        log.info("Creating ArangoDB database for handbook '{}': {}", handbookName, databaseName);
         arangoDB.createDatabase(databaseName);
+      } else {
+        log.debug("ArangoDB database '{}' already exists for handbook '{}'", databaseName, handbookName);
       }
 
       database = arangoDB.db(databaseName);
@@ -102,15 +152,14 @@ public class ArangoDbService {
       createCollectionIfNotExists(OPERATIONS_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(EXAMPLES_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(FIELDS_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(DOCUMENTATIONS_COLLECTION, CollectionType.DOCUMENT);
 
       // Create edge collection for relationships
       createCollectionIfNotExists(EDGES_COLLECTION, CollectionType.EDGES);
 
       // Note: Named graph will be created after data is indexed (or cleared)
       // This ensures the graph is created with the correct handbook name
-
-      // Create indexes for better query performance
-      createIndexes();
+      // Indexes are created automatically by ArangoDB on _key field
 
       initialized = true;
       log.info("ArangoDB service initialized successfully");
@@ -141,55 +190,17 @@ public class ArangoDbService {
    * Create a named graph for visualization in ArangoDB UI.
    *
    * <p>Creates a General Graph that includes all vertex collections (entities, operations,
-   * examples) and the edges collection. This allows visualization in the Graphs
+   * examples, fields) and the edges collection. This allows visualization in the Graphs
    * section of ArangoDB UI with proper edge label support.
    */
   private void createNamedGraph() {
     try {
-      // Use the handbook name from constructor parameter first
-      String actualHandbookName = handbookName;
-      
-      // If constructor parameter is null or unknown, try to get it from knowledge base
-      if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
-        try {
-          actualHandbookName = oneMcp.knowledgeBase().getHandbookName();
-          log.debug("Retrieved handbook name from knowledge base: {}", actualHandbookName);
-          
-          // If still unknown, try to force initialization
-          if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
-            log.debug("Handbook name is unknown, forcing handbook path resolution");
-            Path handbookPath = oneMcp.knowledgeBase().handbookPath(); // Force initialization
-            // Try to extract name from path if getHandbookName still returns unknown
-            actualHandbookName = oneMcp.knowledgeBase().getHandbookName();
-            if ((actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) && handbookPath != null) {
-              // Extract name from path as fallback
-              actualHandbookName = handbookPath.getFileName().toString();
-              log.debug("Extracted handbook name from path: {}", actualHandbookName);
-            }
-          }
-        } catch (Exception e) {
-          log.debug("Could not retrieve handbook name from knowledge base", e);
-        }
-      }
-      
-      // Final fallback if still unknown
-      if (actualHandbookName == null || actualHandbookName.equals("unknown_handbook")) {
-        log.debug("Could not determine handbook name, using default");
-        actualHandbookName = "onemcp_handbook";
-      }
+      // Use handbook name from constructor
+      String actualHandbookName = (handbookName != null && !handbookName.trim().isEmpty()) 
+          ? handbookName 
+          : "onemcp_handbook";
       
       String graphName = sanitizeGraphName(actualHandbookName);
-      
-      // Delete old graph with wrong name if it exists
-      String oldGraphName = sanitizeGraphName("unknown_handbook");
-      if (!graphName.equals(oldGraphName) && database.graph(oldGraphName).exists()) {
-        log.info("Deleting old graph with incorrect name: {}", oldGraphName);
-        try {
-          database.graph(oldGraphName).drop();
-        } catch (Exception e) {
-          log.debug("Could not delete old graph", e);
-        }
-      }
       
       // Check if graph already exists
       if (database.graph(graphName).exists()) {
@@ -202,7 +213,8 @@ public class ArangoDbService {
           ENTITIES_COLLECTION,
           OPERATIONS_COLLECTION,
           EXAMPLES_COLLECTION,
-          FIELDS_COLLECTION
+          FIELDS_COLLECTION,
+          DOCUMENTATIONS_COLLECTION
       };
       
       // Create edge definition - edges can connect any vertex collection to any other
@@ -221,22 +233,6 @@ public class ArangoDbService {
     } catch (Exception e) {
       log.warn("Failed to create named graph, continuing without formal graph definition", e);
       log.info("You can still visualize using queries in the Queries tab");
-    }
-  }
-
-  /**
-   * Create indexes on collections for better query performance.
-   */
-  private void createIndexes() {
-    try {
-      // Index on nodeType for all document collections
-      log.debug("Creating indexes for graph collections");
-      
-      // These indexes will be created on-demand by ArangoDB based on query patterns
-      // For now, we rely on the _key index which is automatic
-      
-    } catch (Exception e) {
-      log.warn("Failed to create some indexes, continuing anyway", e);
     }
   }
 
@@ -443,13 +439,14 @@ public class ArangoDbService {
       case "operation" -> OPERATIONS_COLLECTION;
       case "example" -> EXAMPLES_COLLECTION;
       case "field" -> FIELDS_COLLECTION;
+      case "documentation" -> DOCUMENTATIONS_COLLECTION;
       default -> throw new IllegalArgumentException("Unknown node type: " + nodeType);
     };
   }
 
   /**
    * Validate that a key matches the expected node key format.
-   * Valid formats: entity|..., op|..., field|..., example|...
+   * Valid formats: entity|..., op|..., field|..., example|..., doc|...
    *
    * @param key the key to validate
    * @return true if valid, false otherwise
@@ -461,9 +458,11 @@ public class ArangoDbService {
     // Check for valid prefixes (before sanitization)
     return key.startsWith("entity|") || key.startsWith("op|") || 
            key.startsWith("field|") || key.startsWith("example|") ||
+           key.startsWith("doc|") ||
            // Also check sanitized format (after | -> _ replacement)
            key.startsWith("entity_") || key.startsWith("op_") ||
-           key.startsWith("field_") || key.startsWith("example_");
+           key.startsWith("field_") || key.startsWith("example_") ||
+           key.startsWith("doc_");
   }
 
   /**
@@ -479,6 +478,7 @@ public class ArangoDbService {
     if (key.startsWith("op|") || key.startsWith("op_")) return OPERATIONS_COLLECTION;
     if (key.startsWith("example|") || key.startsWith("example_")) return EXAMPLES_COLLECTION;
     if (key.startsWith("field|") || key.startsWith("field_")) return FIELDS_COLLECTION;
+    if (key.startsWith("doc|") || key.startsWith("doc_")) return DOCUMENTATIONS_COLLECTION;
     
     // Log warning for unknown key format
     log.warn("Could not determine collection for key: {}, defaulting to {}", key, ENTITIES_COLLECTION);
@@ -502,17 +502,6 @@ public class ArangoDbService {
   }
 
   /**
-   * Sanitize a key to be valid for ArangoDB (legacy method, kept for compatibility).
-   *
-   * @param key the key to sanitize
-   * @return sanitized key
-   */
-  private String sanitizeKey(String key) {
-    // Replace invalid characters with underscores, but keep pipe (|) and angle brackets (<>) for separators
-    return key.replaceAll("[^a-zA-Z0-9_\\-:@\\.|<>]", "_");
-  }
-
-  /**
    * Sanitize a graph name to be valid for ArangoDB.
    *
    * @param name the graph name to sanitize
@@ -532,10 +521,11 @@ public class ArangoDbService {
   }
 
   /**
-   * Clear all graph data from the database. Use with caution!
+   * Clear all graph data from the handbook-specific database.
    *
-   * <p>This method clears all collections and drops any existing graphs to ensure
-   * a clean state for re-indexing.
+   * <p>This method clears all collections and drops any existing graphs in the current
+   * handbook's database to ensure a clean state for re-indexing. Only affects the
+   * database for this specific handbook.
    *
    * @throws IoException if clear operation fails
    */
@@ -545,7 +535,8 @@ public class ArangoDbService {
       return;
     }
 
-    log.warn("Clearing all graph data from ArangoDB");
+    log.warn("Clearing all graph data from ArangoDB database '{}' for handbook '{}'", 
+        databaseName, handbookName);
     try {
       // IMPORTANT: Drop all graphs FIRST before dropping collections
       // Collections that are part of a graph cannot be dropped directly
@@ -586,6 +577,7 @@ public class ArangoDbService {
       createCollectionIfNotExists(OPERATIONS_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(EXAMPLES_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(FIELDS_COLLECTION, CollectionType.DOCUMENT);
+      createCollectionIfNotExists(DOCUMENTATIONS_COLLECTION, CollectionType.DOCUMENT);
       createCollectionIfNotExists(EDGES_COLLECTION, CollectionType.EDGES);
       
       log.info("Collections recreated and ready for indexing");
@@ -625,6 +617,24 @@ public class ArangoDbService {
    */
   public ArangoDatabase getDatabase() {
     return database;
+  }
+
+  /**
+   * Get the database name for this handbook.
+   *
+   * @return the database name (e.g., "onemcp_acme-handbook")
+   */
+  public String getDatabaseName() {
+    return databaseName;
+  }
+
+  /**
+   * Get the handbook name.
+   *
+   * @return the handbook name
+   */
+  public String getHandbookName() {
+    return handbookName;
   }
 
   /**

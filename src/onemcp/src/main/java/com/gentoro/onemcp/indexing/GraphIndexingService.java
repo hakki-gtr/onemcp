@@ -10,6 +10,7 @@ import com.gentoro.onemcp.indexing.graph.nodes.EntityNode;
 import com.gentoro.onemcp.indexing.graph.nodes.OperationNode;
 import com.gentoro.onemcp.indexing.graph.nodes.ExampleNode;
 import com.gentoro.onemcp.indexing.graph.nodes.FieldNode;
+import com.gentoro.onemcp.indexing.graph.nodes.DocumentationNode;
 import com.gentoro.onemcp.model.LlmClient;
 import com.gentoro.onemcp.prompt.PromptTemplate;
 import com.gentoro.onemcp.utility.JacksonUtility;
@@ -18,13 +19,14 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.tags.Tag;
 import java.io.File;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.Set;
+import java.util.HashSet;
 
 /**
  * Service for building a graph representation of the knowledge base in ArangoDB.
@@ -91,9 +93,6 @@ public class GraphIndexingService {
         indexServiceWithLLM(service);
       }
 
-      // COMMENTED OUT: Index general documentation (doc chunks)
-      // indexGeneralDocumentation();
-
       // Ensure graph exists after indexing (in case it wasn't created during clear)
       arangoDbService.ensureGraphExists();
 
@@ -122,16 +121,16 @@ public class GraphIndexingService {
       }
 
       // Load prompt template
-      PromptTemplate promptTemplate = oneMcp.promptRepository().get("graph-rag-indexing");
+      PromptTemplate promptTemplate = oneMcp.promptRepository().get("api-extraction");
       PromptTemplate.PromptSession session = promptTemplate.newSession();
 
       // Prepare context variables for the prompt
       Map<String, Object> context = preparePromptContext(service);
       
       // Enable the activation section with context
-      // All sections in the template use the same activation ID "graph-rag-indexing"
+      // All sections in the template use the same activation ID "api-extraction"
       // Enabling it once will enable all sections with that ID
-      session.enable("graph-rag-indexing", context);
+      session.enable("api-extraction", context);
       
       // Render messages and verify we have content to send
       List<LlmClient.Message> messages = session.renderMessages();
@@ -164,9 +163,15 @@ public class GraphIndexingService {
         arangoDbService.storeNode(field);
       }
 
-      // Index extracted operations
+      // Index extracted operations (deduplicate by key to ensure shared operations)
+      Set<String> seenOperationKeys = new HashSet<>();
       for (OperationNode operation : result.operations()) {
+        if (!seenOperationKeys.contains(operation.getKey())) {
         arangoDbService.storeNode(operation);
+          seenOperationKeys.add(operation.getKey());
+        } else {
+          log.debug("Skipping duplicate operation: {}", operation.getKey());
+        }
       }
 
       // Index extracted examples
@@ -198,22 +203,73 @@ public class GraphIndexingService {
         }
       }
 
-      // Index relationships
+      // Index extracted documentations
+      for (DocumentationNode documentation : result.documentations()) {
+        arangoDbService.storeNode(documentation);
+      }
+
+      // Build a set of all valid node keys for validation
+      Set<String> validNodeKeys = new HashSet<>();
+      result.entities().forEach(e -> validNodeKeys.add(e.getKey()));
+      result.fields().forEach(f -> validNodeKeys.add(f.getKey()));
+      result.operations().forEach(o -> validNodeKeys.add(o.getKey()));
+      result.examples().forEach(ex -> validNodeKeys.add(ex.getKey()));
+      result.documentations().forEach(d -> validNodeKeys.add(d.getKey()));
+
+      // Index relationships, filtering out those referencing non-existent nodes and deduplicating
+      int validRelationships = 0;
+      int skippedRelationships = 0;
+      Set<String> seenEdges = new HashSet<>();
+      
       for (GraphEdge edge : result.relationships()) {
+        // Create a unique identifier for this edge
+        String edgeId = edge.getFromKey() + "|" + edge.getEdgeType() + "|" + edge.getToKey();
+        
+        // Skip duplicate edges
+        if (seenEdges.contains(edgeId)) {
+          log.debug("Skipping duplicate edge: {} -> {} (type: {})", 
+              edge.getFromKey(), edge.getToKey(), edge.getEdgeType());
+          skippedRelationships++;
+          continue;
+        }
+        
+        // Validate that both source and target nodes exist
+        if (!validNodeKeys.contains(edge.getFromKey())) {
+          log.debug("Skipping edge from non-existent node: {} -> {} (type: {})", 
+              edge.getFromKey(), edge.getToKey(), edge.getEdgeType());
+          skippedRelationships++;
+          continue;
+        }
+        if (!validNodeKeys.contains(edge.getToKey())) {
+          log.debug("Skipping edge to non-existent node: {} -> {} (type: {})", 
+              edge.getFromKey(), edge.getToKey(), edge.getEdgeType());
+          skippedRelationships++;
+          continue;
+        }
+        
         arangoDbService.storeEdge(edge);
+        seenEdges.add(edgeId);
+        validRelationships++;
+      }
+
+      if (skippedRelationships > 0) {
+        log.warn("Skipped {} invalid/duplicate relationships for service: {}", 
+            skippedRelationships, service.getSlug());
       }
 
       // Log complete graph structure
       logCompleteGraph(service.getSlug(), result);
 
       log.info(
-          "Indexed service {} with {} entities, {} fields, {} operations, {} examples, {} relationships (LLM-based)",
+          "Indexed service {} with {} entities, {} fields, {} operations, {} examples, {} documentations, {} valid relationships ({} skipped) (LLM-based)",
           service.getSlug(),
           result.entities().size(),
           result.fields().size(),
           result.operations().size(),
           result.examples().size(),
-          result.relationships().size());
+          result.documentations().size(),
+          validRelationships,
+          skippedRelationships);
     } catch (Exception e) {
       log.error("Failed to index service with LLM: {}, falling back to rule-based extraction", service.getSlug(), e);
       // Fallback to rule-based extraction
@@ -231,16 +287,25 @@ public class GraphIndexingService {
     Map<String, Object> context = new HashMap<>();
     
     try {
-      // Load instructions.md content
+      // Load instructions.md content - ensure it's never null
+      String instructionsContent = "";
+      try {
       List<KnowledgeDocument> instructions = oneMcp.knowledgeBase().findByUriPrefix("kb:///instructions.md");
-      String instructionsContent = instructions.isEmpty() ? "" : instructions.get(0).content();
+        if (!instructions.isEmpty()) {
+          String content = instructions.get(0).content();
+          instructionsContent = (content != null) ? content : "";
+        }
+      } catch (Exception e) {
+        log.debug("Could not load instructions.md, using empty content", e);
+      }
       context.put("instructions_content", instructionsContent);
 
-      // Load OpenAPI files
+      // Load OpenAPI files - always initialize as empty list
       List<Map<String, String>> openapiFiles = new ArrayList<>();
       Path handbookPath = oneMcp.knowledgeBase().handbookPath();
       Path openapiPath = handbookPath.resolve("openapi");
       if (Files.exists(openapiPath)) {
+        try {
         Files.walk(openapiPath)
             .filter(Files::isRegularFile)
             .filter(p -> p.toString().endsWith(".yaml") || p.toString().endsWith(".yml"))
@@ -254,46 +319,39 @@ public class GraphIndexingService {
                 log.warn("Failed to read OpenAPI file: {}", file, e);
               }
             });
+        } catch (Exception e) {
+          log.warn("Failed to walk OpenAPI directory", e);
+        }
       }
       context.put("openapi_files", openapiFiles);
 
-      // Prepare service information
-      List<Map<String, Object>> services = new ArrayList<>();
-      Map<String, Object> serviceInfo = new HashMap<>();
-      serviceInfo.put("slug", service.getSlug());
-      
-      // Load service.yaml content
-      try {
-        Path serviceYamlPath = handbookPath.resolve(service.getResourcesUri()).resolve("service.yaml");
-        if (Files.exists(serviceYamlPath)) {
-          serviceInfo.put("config", Files.readString(serviceYamlPath));
-        }
-      } catch (Exception e) {
-        log.debug("Could not load service.yaml for {}", service.getSlug(), e);
-      }
-
-      // Prepare operations with documentation
-      List<Map<String, Object>> operations = new ArrayList<>();
-      for (Operation op : service.getOperations()) {
-        Map<String, Object> opInfo = new HashMap<>();
-        opInfo.put("operation", op.getOperation());
-        opInfo.put("method", op.getMethod());
-        opInfo.put("path", op.getPath());
-        
-        // Load operation documentation
+      // Load documentation files from docs/ folder - always initialize as empty list
+      List<Map<String, String>> docsFiles = new ArrayList<>();
+      Path docsPath = handbookPath.resolve("docs");
+      if (Files.exists(docsPath)) {
         try {
-          String docUri = "kb:///services/" + service.getSlug() + "/operations/" + op.getOperation() + ".md";
-          KnowledgeDocument doc = oneMcp.knowledgeBase().getDocument(docUri);
-          opInfo.put("documentation", doc.content());
+          Files.walk(docsPath)
+              .filter(Files::isRegularFile)
+              .filter(p -> {
+                String fileName = p.getFileName().toString().toLowerCase();
+                return fileName.endsWith(".md") || fileName.endsWith(".markdown") || 
+                       fileName.endsWith(".txt") || fileName.endsWith(".mdx");
+              })
+              .forEach(file -> {
+                try {
+                  Map<String, String> fileInfo = new HashMap<>();
+                  fileInfo.put("name", file.getFileName().toString());
+                  fileInfo.put("content", Files.readString(file));
+                  docsFiles.add(fileInfo);
+      } catch (Exception e) {
+                  log.warn("Failed to read documentation file: {}", file, e);
+                }
+              });
         } catch (Exception e) {
-          log.debug("Could not load documentation for operation: {}", op.getOperation(), e);
-          opInfo.put("documentation", "");
+          log.warn("Failed to walk docs directory", e);
         }
-        operations.add(opInfo);
       }
-      serviceInfo.put("operations", operations);
-      services.add(serviceInfo);
-      context.put("services", services);
+      context.put("docs_files", docsFiles);
 
     } catch (Exception e) {
       log.warn("Error preparing prompt context", e);
@@ -314,6 +372,7 @@ public class GraphIndexingService {
     List<FieldNode> fields = new ArrayList<>();
     List<OperationNode> operations = new ArrayList<>();
     List<ExampleNode> examples = new ArrayList<>();
+    List<DocumentationNode> documentations = new ArrayList<>();
     List<GraphEdge> relationships = new ArrayList<>();
 
     try {
@@ -323,7 +382,7 @@ public class GraphIndexingService {
       if (jsonStr == null || jsonStr.trim().isEmpty()) {
         log.warn("No JSON content found in LLM response for service: {}", serviceSlug);
         logLLMParseError(serviceSlug, llmResponse, new IllegalArgumentException("No JSON content found"));
-        return new GraphExtractionResult(entities, fields, operations, examples, relationships);
+        return new GraphExtractionResult(entities, fields, operations, examples, documentations, relationships);
       }
 
       // Try to fix common JSON issues (truncated strings, unclosed structures)
@@ -419,12 +478,26 @@ public class GraphIndexingService {
           @SuppressWarnings("unchecked")
           List<String> operationExamples = (List<String>) opData.getOrDefault("examples", null);
           String category = (String) opData.getOrDefault("category", null);
+          String primaryEntity = (String) opData.getOrDefault("primaryEntity", null);
+          
+          // Validate required fields
+          if (operationId == null || operationId.trim().isEmpty()) {
+            log.warn("Operation missing operationId, skipping");
+            continue;
+          }
           
           // Log category extraction for debugging
           if (category != null) {
             log.trace("Extracted category '{}' for operation: {}", category, operationId);
           } else {
             log.debug("No category found for operation: {}", operationId);
+          }
+          
+          // Log primaryEntity extraction for debugging
+          if (primaryEntity != null) {
+            log.trace("Extracted primaryEntity '{}' for operation: {}", primaryEntity, operationId);
+          } else {
+            log.debug("No primaryEntity found for operation: {}", operationId);
           }
 
           OperationNode operation = new OperationNode(
@@ -442,7 +515,8 @@ public class GraphIndexingService {
               requestSchema,
               responseSchema,
               operationExamples,
-              category);
+              category,
+              primaryEntity);
           operations.add(operation);
         }
       }
@@ -492,6 +566,48 @@ public class GraphIndexingService {
         }
       }
 
+      // Extract documentations
+      @SuppressWarnings("unchecked")
+      List<Map<String, Object>> documentationsList = (List<Map<String, Object>>) result.get("documentations");
+      if (documentationsList != null) {
+        for (Map<String, Object> docData : documentationsList) {
+          String key = (String) docData.get("key");
+          String title = (String) docData.getOrDefault("title", "");
+          String content = (String) docData.getOrDefault("content", "");
+          String docType = (String) docData.getOrDefault("docType", "concept");
+          String sourceFile = (String) docData.getOrDefault("sourceFile", null);
+          @SuppressWarnings("unchecked")
+          List<String> relatedKeys = (List<String>) docData.getOrDefault("relatedKeys", new ArrayList<>());
+          @SuppressWarnings("unchecked")
+          Map<String, String> metadata = (Map<String, String>) docData.getOrDefault("metadata", new HashMap<>());
+          
+          // Generate key if not provided
+          if (key == null && title != null) {
+            key = "doc|" + sanitizeKey(title);
+          } else if (key == null) {
+            log.warn("Documentation missing key and title, skipping");
+            continue;
+          }
+          
+          // Validate required fields
+          if (content == null || content.trim().isEmpty()) {
+            log.debug("Documentation {} has empty content, skipping", key);
+            continue;
+          }
+          
+          DocumentationNode documentation = new DocumentationNode(
+              key,
+              title,
+              content,
+              docType,
+              sourceFile,
+              relatedKeys,
+              serviceSlug,
+              metadata);
+          documentations.add(documentation);
+        }
+      }
+
       // Extract relationships
       @SuppressWarnings("unchecked")
       List<Map<String, Object>> relationshipsList = (List<Map<String, Object>>) result.get("relationships");
@@ -519,7 +635,7 @@ public class GraphIndexingService {
       logLLMParseError(serviceSlug, llmResponse, e);
     }
 
-    return new GraphExtractionResult(entities, fields, operations, examples, relationships);
+    return new GraphExtractionResult(entities, fields, operations, examples, documentations, relationships);
   }
 
   /**
@@ -677,27 +793,14 @@ public class GraphIndexingService {
    * @param error the parsing error
    */
   private void logLLMParseError(String serviceSlug, String llmResponse, Exception error) {
-    try {
-      File logsDir = new File("logs");
-      if (!logsDir.exists()) {
-        logsDir.mkdirs();
-      }
-      
-      // Create timestamp-based filename for error log
-      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
-      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename =
-          String.format(
-              "%s-llm-parse-error-%s-%s.log",
-              sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
-      File errorLogFile = new File(logsDir, filename);
-      
-      try (FileWriter writer = new FileWriter(errorLogFile, false)) {
-        writer.write("=".repeat(80) + "\n");
+    String filename = String.format("%s-llm-parse-error-%s-%s.log",
+        sanitizedHandbookName(), 
+        getTimestamp(), 
+        sanitizeForFilename(serviceSlug));
+    
+    writeLogFile(filename, serviceSlug, writer -> {
         writer.write("JSON PARSING ERROR\n");
         writer.write("=".repeat(80) + "\n");
-        writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
-        writer.write(String.format("SERVICE: %s\n", serviceSlug));
         writer.write(String.format("ERROR TYPE: %s\n", error.getClass().getSimpleName()));
         writer.write(String.format("ERROR MESSAGE: %s\n", error.getMessage()));
         writer.write("-".repeat(80) + "\n");
@@ -712,16 +815,8 @@ public class GraphIndexingService {
         java.io.PrintWriter pw = new java.io.PrintWriter(writer);
         error.printStackTrace(pw);
         pw.flush();
-        
         writer.write("\n");
-        writer.write("=".repeat(80) + "\n");
-        writer.flush();
-      }
-      
-      log.debug("Logged JSON parsing error to file: {}", errorLogFile.getAbsolutePath());
-    } catch (Exception e) {
-      log.warn("Failed to log JSON parsing error to file", e);
-    }
+    });
   }
 
   /**
@@ -756,6 +851,7 @@ public class GraphIndexingService {
       List<FieldNode> fields,
       List<OperationNode> operations,
       List<ExampleNode> examples,
+      List<DocumentationNode> documentations,
       List<GraphEdge> relationships) {}
 
   /**
@@ -900,25 +996,12 @@ public class GraphIndexingService {
    * @param messages the messages sent to LLM
    */
   private void logLLMPrompt(String serviceSlug, List<LlmClient.Message> messages) {
-    try {
-      File logsDir = new File("logs");
-      if (!logsDir.exists()) {
-        logsDir.mkdirs();
-      }
-      
-      // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
-      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
-      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename =
-          String.format(
-              "%s-llm-prompt-%s-%s.log", sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
-      File logFile = new File(logsDir, filename);
-      
-      try (FileWriter writer = new FileWriter(logFile, false)) {
-        writer.write("=".repeat(80) + "\n");
-        writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
-        writer.write(String.format("SERVICE: %s\n", serviceSlug));
-        writer.write("=".repeat(80) + "\n");
+    String filename = String.format("%s-llm-prompt-%s-%s.log", 
+        sanitizedHandbookName(), 
+        getTimestamp(), 
+        sanitizeForFilename(serviceSlug));
+    
+    writeLogFile(filename, serviceSlug, writer -> {
         writer.write("PROMPT MESSAGES:\n");
         writer.write("-".repeat(80) + "\n");
         
@@ -929,15 +1012,7 @@ public class GraphIndexingService {
           writer.write(msg.content());
           writer.write("\n");
         }
-        
-        writer.write("=".repeat(80) + "\n");
-        writer.flush();
-      }
-      
-      log.debug("Logged LLM prompt to file: {}", logFile.getAbsolutePath());
-    } catch (IOException e) {
-      log.warn("Failed to log LLM prompt to file", e);
-    }
+    });
   }
 
   /**
@@ -950,25 +1025,12 @@ public class GraphIndexingService {
    * @param result the graph extraction result containing all nodes and edges
    */
   private void logCompleteGraph(String serviceSlug, GraphExtractionResult result) {
-    try {
-      File logsDir = new File("logs");
-      if (!logsDir.exists()) {
-        logsDir.mkdirs();
-      }
-      
-      // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
-      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
-      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename =
-          String.format(
-              "%s-llm-graph-%s-%s.log", sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
-      File logFile = new File(logsDir, filename);
-      
-      try (FileWriter writer = new FileWriter(logFile, false)) {
-        writer.write("=".repeat(80) + "\n");
-        writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
-        writer.write(String.format("SERVICE: %s\n", serviceSlug));
-        writer.write("=".repeat(80) + "\n");
+    String filename = String.format("%s-llm-graph-%s-%s.log", 
+        sanitizedHandbookName(), 
+        getTimestamp(), 
+        sanitizeForFilename(serviceSlug));
+    
+    writeLogFile(filename, serviceSlug, writer -> {
         writer.write("COMPLETE GRAPH STRUCTURE:\n");
         writer.write("-".repeat(80) + "\n");
         
@@ -1005,6 +1067,13 @@ public class GraphIndexingService {
         }
         graphStructure.put("examples", examplesList);
         
+        // Convert documentations to maps
+        List<Map<String, Object>> documentationsList = new ArrayList<>();
+        for (DocumentationNode documentation : result.documentations()) {
+          documentationsList.add(documentation.toMap());
+        }
+        graphStructure.put("documentations", documentationsList);
+        
         // Convert relationships to maps
         List<Map<String, Object>> relationshipsList = new ArrayList<>();
         for (GraphEdge edge : result.relationships()) {
@@ -1021,6 +1090,7 @@ public class GraphIndexingService {
         summary.put("totalFields", result.fields().size());
         summary.put("totalOperations", result.operations().size());
         summary.put("totalExamples", result.examples().size());
+        summary.put("totalDocumentations", result.documentations().size());
         summary.put("totalRelationships", result.relationships().size());
         graphStructure.put("summary", summary);
         
@@ -1029,14 +1099,7 @@ public class GraphIndexingService {
         String jsonOutput = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(graphStructure);
         writer.write(jsonOutput);
         writer.write("\n");
-        writer.write("=".repeat(80) + "\n");
-        writer.flush();
-      }
-      
-      log.debug("Logged complete graph structure to file: {}", logFile.getAbsolutePath());
-    } catch (Exception e) {
-      log.warn("Failed to log complete graph structure to file", e);
-    }
+    });
   }
 
   /**
@@ -1048,18 +1111,38 @@ public class GraphIndexingService {
    * @param response the response from LLM
    */
   private void logLLMResponse(String serviceSlug, String response) {
+    String filename = String.format("%s-llm-response-%s-%s.log", 
+        sanitizedHandbookName(), 
+        getTimestamp(), 
+        sanitizeForFilename(serviceSlug));
+    
+    writeLogFile(filename, serviceSlug, writer -> {
+      writer.write("LLM RESPONSE:\n");
+      writer.write("-".repeat(80) + "\n");
+      writer.write(response);
+      writer.write("\n");
+    });
+  }
+
+  /**
+   * Write content to a log file with standard header and footer.
+   *
+   * @param filename the log filename
+   * @param serviceSlug the service slug for header
+   * @param contentWriter lambda to write the actual content
+   */
+  @FunctionalInterface
+  private interface LogContentWriter {
+    void write(FileWriter writer) throws Exception;
+  }
+  
+  private void writeLogFile(String filename, String serviceSlug, LogContentWriter contentWriter) {
     try {
       File logsDir = new File("logs");
       if (!logsDir.exists()) {
         logsDir.mkdirs();
       }
       
-      // Create timestamp-based filename (filesystem-safe format: yyyyMMdd-HHmmss-SSS)
-      String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
-      String sanitizedServiceSlug = serviceSlug != null ? serviceSlug.replaceAll("[^a-zA-Z0-9_-]", "_") : "unknown";
-      String filename =
-          String.format(
-              "%s-llm-response-%s-%s.log", sanitizedHandbookName(), timestamp, sanitizedServiceSlug);
       File logFile = new File(logsDir, filename);
       
       try (FileWriter writer = new FileWriter(logFile, false)) {
@@ -1067,18 +1150,37 @@ public class GraphIndexingService {
         writer.write(String.format("TIMESTAMP: %s\n", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
         writer.write(String.format("SERVICE: %s\n", serviceSlug));
         writer.write("=".repeat(80) + "\n");
-        writer.write("LLM RESPONSE:\n");
-        writer.write("-".repeat(80) + "\n");
-        writer.write(response);
-        writer.write("\n");
+        
+        contentWriter.write(writer);
+        
         writer.write("=".repeat(80) + "\n");
         writer.flush();
       }
       
-      log.debug("Logged LLM response to file: {}", logFile.getAbsolutePath());
-    } catch (IOException e) {
-      log.warn("Failed to log LLM response to file", e);
+      log.debug("Logged to file: {}", logFile.getAbsolutePath());
+    } catch (Exception e) {
+      log.warn("Failed to write log file: {}", filename, e);
     }
+  }
+
+  /**
+   * Get a timestamp string for log filenames.
+   *
+   * @return timestamp in format yyyyMMdd-HHmmss-SSS
+   */
+  private String getTimestamp() {
+    return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
+  }
+
+  /**
+   * Sanitize a string for use in filenames.
+   *
+   * @param input the input string
+   * @return sanitized string safe for filenames
+   */
+  private String sanitizeForFilename(String input) {
+    if (input == null) return "unknown";
+    return input.replaceAll("[^a-zA-Z0-9_-]", "_");
   }
 
   /**
