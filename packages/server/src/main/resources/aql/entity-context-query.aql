@@ -1,0 +1,64 @@
+LET entity = FIRST(
+  FOR e IN entities
+    FILTER e._key == @entityName OR e._key == @entityKey OR LOWER(e.name) == LOWER(@entityName)
+    RETURN e
+)
+
+LET fields = (
+  entity == null ? [] : (
+    FOR f IN 1..1 OUTBOUND entity edges
+      FILTER f.nodeType == 'field'
+      RETURN f
+  )
+)
+
+LET entityDocs = (
+  entity == null ? [] : (
+    FOR doc IN 1..1 OUTBOUND entity edges
+      FILTER doc.nodeType == 'documentation'
+      RETURN doc
+  )
+)
+
+LET operations = (
+  entity == null ? [] : (
+    FOR op IN 1..1 OUTBOUND entity edges
+      FILTER op.nodeType == 'operation'
+      FILTER @categories == [] OR op.category IN @categories
+
+      LET examples = (
+        FOR ex IN 1..1 OUTBOUND op edges
+          FILTER ex.nodeType == 'example'
+          RETURN ex
+      )
+
+      LET opDocs = (
+        FOR doc IN 1..1 OUTBOUND op edges
+          FILTER doc.nodeType == 'documentation'
+          RETURN doc
+      )
+
+      RETURN {
+        operationId: op.operationId,
+        method: op.method,
+        path: op.path,
+        summary: op.summary,
+        description: op.description,
+        category: op.category,
+        signature: op.signature,
+        requestSchema: op.requestSchema,
+        responseSchema: op.responseSchema,
+        tags: op.tags,
+        primaryEntity: op.primaryEntity,
+        examples: examples,
+        documentation: opDocs
+      }
+  )
+)
+
+RETURN {
+  entity: entity,
+  fields: fields,
+  entityDocumentation: entityDocs,
+  operations: operations
+}

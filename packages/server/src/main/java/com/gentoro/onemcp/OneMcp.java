@@ -14,6 +14,7 @@ import com.gentoro.onemcp.exception.ExecutionException;
 import com.gentoro.onemcp.exception.KnowledgeBaseException;
 import com.gentoro.onemcp.exception.StateException;
 import com.gentoro.onemcp.http.EmbeddedJettyServer;
+import com.gentoro.onemcp.indexing.GraphIndexingService;
 import com.gentoro.onemcp.mcp.McpServer;
 import com.gentoro.onemcp.model.LlmClient;
 import com.gentoro.onemcp.model.LlmClientFactory;
@@ -71,6 +72,17 @@ public class OneMcp {
     }
 
     this.llmClient = LlmClientFactory.createProvider(this);
+
+    if (configuration().getBoolean("graph.indexing.enabled", false)) {
+      try {
+        log.info("Graph indexing enabled via configuration");
+        new GraphIndexingService(this).indexKnowledgeBase();
+      } catch (Exception e) {
+        throw new KnowledgeBaseException("Failed to index Handbook content", e);
+      }
+    } else {
+      log.debug("Graph indexing disabled via configuration");
+    }
 
     // Initialize shared Jetty server and register components
     this.httpServer = new EmbeddedJettyServer(this);
