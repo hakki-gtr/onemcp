@@ -42,6 +42,7 @@ public class KnowledgeBase {
   private final List<Service> services = new ArrayList<>();
   private final OneMcp oneMcp;
   private Path handbookLocation = null;
+  private String handbookNameCache = null;
 
   /**
    * Create a new knowledge base bound to the provided configuration.
@@ -372,6 +373,44 @@ public class KnowledgeBase {
         .findFirst()
         .orElseThrow(
             () -> new NotFoundException("Document not found: " + uri));
+  }
+
+  /**
+   * Returns a stable handbook name derived from configuration or handbook location.
+   *
+   * @return handbook name suitable for downstream services (e.g., graph indexing)
+   */
+  public synchronized String getHandbookName() {
+    if (handbookNameCache != null && !handbookNameCache.isBlank()) {
+      return handbookNameCache;
+    }
+
+    String configuredName = oneMcp.configuration().getString("handbook.name", "");
+    if (configuredName != null && !configuredName.isBlank()) {
+      handbookNameCache = configuredName.trim();
+      return handbookNameCache;
+    }
+
+    String location = oneMcp.configuration().getString("handbook.location", "handbook");
+    // Normalize classpath: prefix and filesystem paths
+    String normalized = location.replace("\\", "/");
+    if (normalized.contains("/")) {
+      normalized = normalized.substring(normalized.lastIndexOf('/') + 1);
+    }
+    if (normalized.startsWith("classpath:")) {
+      normalized = normalized.substring("classpath:".length());
+      normalized = normalized.replaceFirst("^[/\\\\]*", "");
+      if (normalized.contains("/")) {
+        normalized = normalized.substring(0, normalized.indexOf('/'));
+      }
+    }
+
+    if (normalized.isBlank()) {
+      normalized = "handbook";
+    }
+
+    handbookNameCache = normalized;
+    return handbookNameCache;
   }
 
   /**

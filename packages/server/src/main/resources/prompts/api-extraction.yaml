@@ -1,0 +1,129 @@
+activations:
+  - role: system
+    activation: api-extraction
+    content: |
+      Extract API entities and operations to build a traversable graph for finding API information.
+      Focus on entity-operation relationships for context-aware API discovery.
+
+  - role: user
+    activation: api-extraction
+    content: |
+      {% if instructions_content is not empty %}## Instructions
+      ```
+      {{ instructions_content | raw }}
+      ```
+      {% endif %}
+      {% if openapi_files is not empty %}
+      {% for openapi_file in openapi_files %}## OpenAPI: {{ openapi_file.name }}
+      ```yaml
+      {{ openapi_file.content | raw }}
+      ```
+      {% endfor %}
+      {% endif %}
+      {% if docs_files is not empty %}## Documentation
+      {% for doc_file in docs_files %}**{{ doc_file.name }}**
+      ```
+      {{ doc_file.content | raw }}
+      ```
+      {% endfor %}
+      {% endif %}
+
+  - role: user
+    activation: api-extraction
+    content: |
+      Extract API information as a traversable graph. Given context about entities or operations, return relevant API information with confidence scores.
+
+      **Graph Nodes:**
+
+      **1. Entities** (business objects)
+      ```json
+      {"key": "entity|Name", "name": "Name", "description": "...", "domain": "...", "serviceSlug": "..."}
+      ```
+
+      **2. Operations** (API endpoints)
+      ```json
+      {"key": "op|opId", "operationId": "opId", "method": "GET|POST|PUT|PATCH|DELETE", "path": "/path", "summary": "...", "description": "...", "category": "Retrieve|Create|Update|Delete|Compute", "tags": [...], "serviceSlug": "..."}
+      ```
+      Category mapping: GET→Retrieve, POST→Create, PUT/PATCH→Update, DELETE→Delete, aggregations→Compute
+
+      **3. Fields** (key entity fields for API discovery)
+      ```json
+      {"key": "field|entityName_fieldName", "name": "fieldName", "fieldType": "string|number|date|boolean|array|object", "entityKey": "entity|EntityName", "description": "...", "example": "...", "serviceSlug": "..."}
+      ```
+      Extract: Primary fields per entity (focus on 3-5 most important fields)
+
+      **4. Examples** (operation usage examples)
+      ```json
+      {"key": "example|opId_scenario", "name": "scenario", "description": "...", "requestBody": "...", "responseBody": "...", "operationKey": "op|opId", "serviceSlug": "..."}
+      ```
+      Extract: 1-2 examples per operation showing typical usage
+
+      **5. Documentation** (API usage guidance)
+      ```json
+      {"key": "doc|type_entityName", "title": "...", "content": "...", "docType": "entity_guide|operation_guide|field_reference", "sourceFile": "...", "relatedKeys": ["entity|X"], "serviceSlug": "..."}
+      ```
+      Extract: Key documentation chunks that help with API understanding
+
+      **Graph Relationships:**
+
+      **Entity-Operation Edges** (CRITICAL for traversal)
+      ```json
+      {"fromKey": "entity|X", "toKey": "op|Y", "edgeType": "SUPPORTS_RETRIEVE|CREATE|UPDATE|DELETE|COMPUTE", "confidence": 80-100, "referral": "direct|indirect|inferred"}
+      ```
+
+      **Additional Edges:**
+      ```json
+      {"fromKey": "entity|X", "toKey": "field|Y", "edgeType": "HAS_FIELD"},
+      {"fromKey": "op|X", "toKey": "example|Y", "edgeType": "HAS_EXAMPLE"},
+      {"fromKey": "entity|X", "toKey": "doc|Y", "edgeType": "HAS_DOCUMENTATION"}
+      ```
+
+      **Relationship Rules:**
+      1. **Direct**: Operation explicitly mentions entity in tags, path, or description (confidence: 90-100)
+      2. **Indirect**: Operation relates to entity through shared fields/schemas (confidence: 70-89)
+      3. **Inferred**: Operation likely works with entity based on domain/semantic analysis (confidence: 50-69)
+
+      **Context-Aware Output:**
+
+      Given input context, return relevant entities with their supported operations:
+
+      ```json
+      {
+        "context": [
+          {
+            "entity": "EntityName",
+            "operations": ["Retrieve", "Create", "Update", "Delete", "Compute"],
+            "confidence": 85,
+            "referral": "direct"
+          }
+        ]
+      }
+      ```
+
+      **Output Format:**
+      ```json
+      {
+        "entities": [...],
+        "operations": [...],
+        "fields": [...],
+        "examples": [...],
+        "documentations": [...],
+        "relationships": [...],
+        "context": [
+          {
+            "entity": "EntityName",
+            "operations": ["OperationType"],
+            "confidence": 0-100,
+            "referral": "direct|indirect|inferred"
+          }
+        ]
+      }
+      ```
+
+      **Processing Steps:**
+      1. Extract entities from schemas and documentation
+      2. Extract operations with categories and key fields per entity (3-5 most important)
+      3. Extract 1-2 examples per operation showing typical usage
+      4. Extract key documentation chunks for API understanding
+      5. Create comprehensive relationships (entity-operation, entity-field, operation-example, entity-documentation)
+      6. For given context, return relevant entity-operation mappings with confidence scores
