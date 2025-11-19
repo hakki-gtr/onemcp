@@ -83,9 +83,9 @@ public class GraphQueryExample {
     GraphQueryService.QueryRequest request = new GraphQueryService.QueryRequest();
     
     List<GraphQueryService.ContextItem> context = Arrays.asList(
-        // new GraphQueryService.ContextItem("Sale", Arrays.asList("Retrieve", "Compute"), 100, "direct")
+        new GraphQueryService.ContextItem("Sale", Arrays.asList("Retrieve", "Compute"), 100, "direct")
         //new GraphQueryService.ContextItem("Category", Arrays.asList("Retrieve"), 100, "direct")
-        new GraphQueryService.ContextItem("Product", Arrays.asList("Retrieve"), 100, "indirect")
+        //new GraphQueryService.ContextItem("Product", Arrays.asList("Retrieve"), 100, "indirect")
     );
     
     request.setContext(context);
