@@ -62,8 +62,8 @@ public final class GraphQueryScript {
       try (GraphQueryService graphQueryService = new GraphQueryService(oneMcp)) {
         log.info(
             "Running graph query for {} context items", request.getContext().size());
-        List<GraphQueryService.QueryResult> results = graphQueryService.query(request);
-        printResults(results);
+        List<GraphQueryService.OperationOrientedGroup> results = graphQueryService.queryOperationOriented(request);
+        printOperationOrientedResults(results);
       }
     } catch (Exception e) {
       log.error("Graph query execution failed", e);
@@ -112,6 +112,18 @@ public final class GraphQueryScript {
     payload.put("count", results.size());
 
     String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(payload);
+    System.out.println(json);
+  }
+
+  private static void printFlattenedResults(List<GraphQueryService.FlattenedResultGroup> results)
+      throws JsonProcessingException {
+    String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(results);
+    System.out.println(json);
+  }
+
+  private static void printOperationOrientedResults(List<GraphQueryService.OperationOrientedGroup> results)
+      throws JsonProcessingException {
+    String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(results);
     System.out.println(json);
   }
 
