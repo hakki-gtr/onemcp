@@ -99,6 +99,7 @@ Verification & Troubleshooting
 ------------------------------
 - Confirm the Arango graph via the admin UI at `http://localhost:8529` (database named after the handbook).
 - Run [`test-graph-query.sh`](https://github.com/Gentoro-OneMCP/onemcp/blob/main/scripts/server/test-graph-query.sh) to execute a smoke query against the graph driver; it compiles the shaded jar if needed and uses the same driver settings.
+- Use the diagnostic query to inspect graph structure: run `GraphQueryScript` with `--operation <operationId> --diagnostic` to see what entities, fields, and relationships are connected to a specific operation.
 - If indexing is skipped:
   - Check that `GRAPH_INDEXING_ENABLED` **and** `ARANGODB_ENABLED` are true.
   - Validate the configured credentials by logging into Arango with the same host/user/password.
