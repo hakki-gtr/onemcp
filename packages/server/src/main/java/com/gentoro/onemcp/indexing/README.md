@@ -56,6 +56,17 @@ Operational Notes
 - **Partial updates**: Not supported; re-run the full indexing pass whenever the source material changes.
 - **Driver selection**: Only Arango is wired up today; set `graph.indexing.driver` to another key once a new driver is added without touching the calling code.
 
+OpenAPI Parsing & Chunking
+--------------------------
+- **Parser**: `OpenApiSpecParser` loads the OpenAPI document once and exposes helpers (operations, tags, schema summaries) used during prompt construction.
+- **Chunker**: `OpenApiChunker` groups operations by tag/path so large specs can be sliced into LLM-sized chunks. Each chunk becomes its own prompt with a reduced YAML payload.
+- **Configuration**:
+  - Set `GRAPH_INDEXING_CHUNKING_ENABLED=true` to turn on chunking globally.
+  - Override per type via `GRAPH_INDEXING_CHUNKING_OPENAPI_ENABLED` (empty value = inherit global).
+  - Defaults: 20 operations or ~50 KB per chunk; tune by instantiating `OpenApiChunker` with custom limits if needed.
+- **Fallbacks**: If chunking is disabled (or no chunks are produced) the service falls back to the legacy “whole spec” flow so indexing still succeeds.
+- **Prompt context**: Chunk processing automatically injects `instructions.md`, chunk-specific YAML, tag metadata, and docs/ excerpts into the LLM template located under `packages/server/src/main/resources/prompts/api-extraction.yaml`.
+
 Observability & Logs
 --------------------
 - All indexing artifacts land under `packages/server/logs` with descriptive prefixes:
@@ -63,7 +74,6 @@ Observability & Logs
   - `*-llm-response-...log`: verbatim responses for auditing.
   - `*-llm-graph-...log`: structured snapshot of the nodes and relationships sent to the driver.
   - `*-llm-parse-error-...log`: raw payloads plus stack traces whenever parsing fails.
-- Use these logs to inspect what was indexed, replay prompts, or share repros with the infra team.
 
 Querying the Graph
 ------------------

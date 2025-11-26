@@ -30,6 +30,23 @@ public interface GraphQueryDriver extends AutoCloseable {
   Map<String, Object> queryContext(String entityName, List<String> requestedCategories);
 
   /**
+   * Execute a query for a specific operation to gather all data needed for prompt generation.
+   *
+   * @param operationKey operation key (e.g., "op|querySalesData") or operationId
+   * @return raw structured data with operation details, relationships, examples, fields, etc., or {@code null} when no data found
+   */
+  Map<String, Object> queryOperationForPrompt(String operationKey);
+
+  /**
+   * Execute a diagnostic query to inspect the graph structure for a specific operation.
+   * This helps verify what entities are connected, what fields exist, and what relationships are present.
+   *
+   * @param operationKey operation key (e.g., "op|querySalesData") or operationId
+   * @return raw structured data with diagnostic information about the graph structure, or {@code null} when operation not found
+   */
+  Map<String, Object> queryGraphDiagnostics(String operationKey);
+
+  /**
    * @return logical driver identifier (e.g., {@code arangodb}).
    */
   String getDriverName();

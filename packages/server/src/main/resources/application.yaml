@@ -69,6 +69,16 @@ graph:
   indexing:
     enabled: ${env:GRAPH_INDEXING_ENABLED:-false}
     clearOnStartup: ${env:GRAPH_INDEXING_CLEAR_ON_STARTUP:-true}
+    chunking:
+      # Global chunking toggle (applies to all document types if type-specific config not set)
+      enabled: ${env:GRAPH_INDEXING_CHUNKING_ENABLED:-false}
+      # Document type specific chunking configurations
+      # These override the global setting when explicitly configured
+      openapi:
+        enabled: ${env:GRAPH_INDEXING_CHUNKING_OPENAPI_ENABLED:-}
+      # TODO: Add more document type chunking configurations here as needed
+      # markdown:
+      #   enabled: ${env:GRAPH_INDEXING_CHUNKING_MARKDOWN_ENABLED:-}
     driver: ${env:GRAPH_INDEXING_DRIVER:-arangodb}
     # NOTE: ArangoDB must be running with authentication configured:
     #   docker run -e ARANGO_ROOT_PASSWORD=test123 -p 8529:8529 -d arangodb:latest

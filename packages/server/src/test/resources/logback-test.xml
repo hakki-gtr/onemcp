@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <!-- Suppress Swagger parser verbose logging that outputs entire OpenAPI spec -->
+  <logger name="io.swagger.v3.parser" level="WARN"/>
+  <logger name="io.swagger" level="WARN"/>
+  
+  <!-- Reduce OpenApiChunker info logs to debug during tests -->
+  <logger name="com.gentoro.onemcp.indexing.openapi.OpenApiChunker" level="DEBUG"/>
+  
+  <!-- Root logger for tests -->
+  <root level="INFO">
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+      <encoder>
+        <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+      </encoder>
+    </appender>
+  </root>
+</configuration>
+
