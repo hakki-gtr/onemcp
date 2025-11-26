@@ -24,7 +24,8 @@ LET operations = (
   entity == null ? [] : (
     FOR op IN 1..1 OUTBOUND entity edges
       FILTER op.nodeType == 'operation'
-      FILTER @categories == [] OR op.category IN @categories
+      // Include operation if: no categories specified, OR operation category matches, OR operation has no category (include by default)
+      FILTER @categories == [] OR op.category IN @categories OR op.category == null OR op.category == ""
 
       LET examples = (
         FOR ex IN 1..1 OUTBOUND op edges
@@ -56,9 +57,25 @@ LET operations = (
   )
 )
 
+// Get entity relationships (entity-to-entity relationships)
+LET entityRelationships = (
+  entity == null ? [] : (
+    FOR relatedEntity, edge IN 1..1 OUTBOUND entity edges
+      FILTER relatedEntity.nodeType == 'entity'
+      RETURN {
+        fromEntity: entity.name,
+        toEntity: relatedEntity.name,
+        relationshipType: edge.edgeType,
+        description: edge.description,
+        strength: edge.strength
+      }
+  )
+)
+
 RETURN {
   entity: entity,
   fields: fields,
   entityDocumentation: entityDocs,
-  operations: operations
+  operations: operations,
+  entityRelationships: entityRelationships
 }

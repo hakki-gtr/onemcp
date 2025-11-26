@@ -5,15 +5,18 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gentoro.onemcp.OneMcp;
 import com.gentoro.onemcp.indexing.GraphQueryService;
+import com.gentoro.onemcp.indexing.OperationPromptResult;
 import com.gentoro.onemcp.logging.LoggingService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Small utility entry point that wires {@link GraphQueryService} with a {@link OneMcp} context to
@@ -27,6 +30,13 @@ import java.util.Map;
  *        com.gentoro.onemcp.scripts.GraphQueryScript \
  *        --config-file classpath:application.yaml \
  *        --context-file /path/to/context.json
+ * </pre>
+ *
+ * To test operation prompt query:
+ * <pre>
+ *   java -cp packages/server/target/onemcp-1.0-SNAPSHOT-jar-with-dependencies.jar \
+ *        com.gentoro.onemcp.scripts.GraphQueryScript \
+ *        --operation op|querySalesData
  * </pre>
  *
  * The script defaults to the ACME handbook context provided in the README when no custom context
@@ -60,10 +70,23 @@ public final class GraphQueryScript {
       oneMcp.initialize();
 
       try (GraphQueryService graphQueryService = new GraphQueryService(oneMcp)) {
-        log.info(
-            "Running graph query for {} context items", request.getContext().size());
-        List<GraphQueryService.OperationOrientedGroup> results = graphQueryService.queryOperationOriented(request);
-        printOperationOrientedResults(results);
+        // If diagnostic flag is set, run diagnostic query
+        if (cliArgs.diagnostic() && cliArgs.operationKey() != null && !cliArgs.operationKey().isBlank()) {
+          log.info("Running graph diagnostic query for operation: {}", cliArgs.operationKey());
+          Map<String, Object> diagnostics = graphQueryService.queryGraphDiagnostics(cliArgs.operationKey());
+          printDiagnostics(diagnostics);
+        }
+        // If operation key is provided, test operation prompt query
+        else if (cliArgs.operationKey() != null && !cliArgs.operationKey().isBlank()) {
+          log.info("Testing operation prompt query for operation: {}", cliArgs.operationKey());
+          OperationPromptResult result = graphQueryService.queryOperationForPrompt(cliArgs.operationKey());
+          printOperationPromptResult(result);
+        } else {
+          log.info(
+              "Querying operations for prompt generation with {} context items", request.getContext().size());
+          List<OperationPromptResult> results = graphQueryService.queryOperationsForPrompt(request);
+          printOperationPromptResults(results);
+        }
       }
     } catch (Exception e) {
       log.error("Graph query execution failed", e);
@@ -95,35 +118,44 @@ public final class GraphQueryScript {
     contextItems.add(
         new GraphQueryService.ContextItem(
             "Sale", List.of("Retrieve", "Compute"), 100, "direct"));
-    contextItems.add(
-        new GraphQueryService.ContextItem(
-            "Customer", List.of("Retrieve"), 100, "direct"));
-    contextItems.add(
-        new GraphQueryService.ContextItem(
-            "Product", List.of("Retrieve"), 100, "indirect"));
+    // contextItems.add(
+    //     new GraphQueryService.ContextItem(
+    //         "Customer", List.of("Retrieve"), 100, "direct"));
+    // contextItems.add(
+    //     new GraphQueryService.ContextItem(
+    //         "Product", List.of("Retrieve"), 100, "indirect")
+    //       );
 
     return new GraphQueryService.QueryRequest(contextItems);
   }
 
-  private static void printResults(List<GraphQueryService.QueryResult> results)
+  private static void printOperationPromptResults(List<OperationPromptResult> results)
       throws JsonProcessingException {
-    Map<String, Object> payload = new HashMap<>();
-    payload.put("results", results);
-    payload.put("count", results.size());
-
-    String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(payload);
-    System.out.println(json);
-  }
-
-  private static void printFlattenedResults(List<GraphQueryService.FlattenedResultGroup> results)
-      throws JsonProcessingException {
+    if (results == null || results.isEmpty()) {
+      System.out.println("No operations found");
+      return;
+    }
     String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(results);
     System.out.println(json);
   }
 
-  private static void printOperationOrientedResults(List<GraphQueryService.OperationOrientedGroup> results)
+  private static void printOperationPromptResult(OperationPromptResult result)
       throws JsonProcessingException {
-    String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(results);
+    if (result == null) {
+      System.out.println("No operation found");
+      return;
+    }
+    String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(result);
+    System.out.println(json);
+  }
+
+  private static void printDiagnostics(Map<String, Object> diagnostics)
+      throws JsonProcessingException {
+    if (diagnostics == null) {
+      System.out.println("No diagnostic information found");
+      return;
+    }
+    String json = MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(diagnostics);
     System.out.println(json);
   }
 
@@ -136,9 +168,10 @@ public final class GraphQueryScript {
     return params.toArray(String[]::new);
   }
 
-  private record CliArgs(String configFile, String contextFile, String mode) {
+  private record CliArgs(String configFile, String contextFile, String mode, String operationKey, boolean diagnostic) {
     static CliArgs parse(String[] args) {
       Map<String, String> values = new HashMap<>();
+      Set<String> flags = new HashSet<>();
       for (int i = 0; i < args.length; i++) {
         String arg = args[i];
         if (!arg.startsWith("--")) {
@@ -151,20 +184,27 @@ public final class GraphQueryScript {
         } else if (value != null) {
           i++;
         }
-        values.put(key, value);
+        if (value == null) {
+          // This is a flag (boolean option)
+          flags.add(key);
+        } else {
+          values.put(key, value);
+        }
       }
 
       String config =
           values.getOrDefault("config-file", "classpath:application.yaml");
       String context = values.get("context-file");
       String mode = values.getOrDefault("mode", "server");
+      String operationKey = values.get("operation");
+      boolean diagnostic = flags.contains("diagnostic");
 
       if (!List.of("interactive", "dry-run", "server").contains(mode)) {
         log.warn("Unsupported mode '{}', defaulting to 'server'", mode);
         mode = "server";
       }
 
-      return new CliArgs(config, context, mode);
+      return new CliArgs(config, context, mode, operationKey, diagnostic);
     }
   }
 }
