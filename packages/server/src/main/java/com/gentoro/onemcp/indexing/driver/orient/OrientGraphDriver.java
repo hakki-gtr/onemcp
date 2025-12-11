@@ -40,9 +40,9 @@ public class OrientGraphDriver implements GraphDriver {
     if (initialized.get()) return;
 
     try {
-      String root = oneMcp.configuration().getString("graph.orient.rootDir", "data/orient");
-      String prefix = oneMcp.configuration().getString("graph.orient.databasePrefix", "onemcp-");
-      String configured = oneMcp.configuration().getString("graph.orient.database", "");
+      String root = oneMcp.configuration().getString("indexing.graph.orient.rootDir", "data/orient");
+      String prefix = oneMcp.configuration().getString("indexing.graph.orient.databasePrefix", "onemcp-");
+      String configured = oneMcp.configuration().getString("indexing.graph.orient.database", "");
       this.database =
           (configured != null && !configured.isBlank()) ? configured : (prefix + handbookName);
 
@@ -54,7 +54,7 @@ public class OrientGraphDriver implements GraphDriver {
       // CORRECT: actual DB folder in embedded mode
       this.dbRoot = Path.of(root, "databases", this.database).toFile();
 
-      if (oneMcp.configuration().getBoolean("graph.indexing.clearOnStartup", false)) {
+      if (oneMcp.configuration().getBoolean("indexing.graph.clearOnStartup", false)) {
         FileUtility.deleteDir(dbRoot.toPath(), true);
       }
 

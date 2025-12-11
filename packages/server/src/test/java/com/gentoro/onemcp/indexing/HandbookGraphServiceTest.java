@@ -188,11 +188,11 @@ class HandbookGraphServiceTest {
     docs.put(tmp.relativize(a).toString(), Files.readString(a));
 
     BaseConfiguration cfg = new BaseConfiguration();
-    cfg.addProperty("graph.indexing.clearOnStartup", true);
-    cfg.addProperty("graph.indexing.chunking.markdown.strategy", "paragraph");
+    cfg.addProperty("indexing.graph.clearOnStartup", true);
+    cfg.addProperty("indexing.graph.chunking.markdown.strategy", "paragraph");
     // Use a tiny window to ensure separate chunks per paragraph in PARAGRAPH strategy
-    cfg.addProperty("graph.indexing.chunking.markdown.windowSizeTokens", 1);
-    cfg.addProperty("graph.indexing.chunking.markdown.overlapTokens", 0);
+    cfg.addProperty("indexing.graph.chunking.markdown.windowSizeTokens", 1);
+    cfg.addProperty("indexing.graph.chunking.markdown.overlapTokens", 0);
 
     // Create a lightweight TestMcp and Handbook
     OneMcp mcp = new TestMcp(cfg, null);
@@ -229,9 +229,9 @@ class HandbookGraphServiceTest {
     docs.put(tmp.relativize(a).toString(), Files.readString(a));
 
     BaseConfiguration cfg = new BaseConfiguration();
-    cfg.addProperty("graph.indexing.clearOnStartup", true);
-    cfg.addProperty("graph.indexing.chunking.markdown.strategy", "heading");
-    cfg.addProperty("graph.indexing.chunking.markdown.windowSizeTokens", 100);
+    cfg.addProperty("indexing.graph.clearOnStartup", true);
+    cfg.addProperty("indexing.graph.chunking.markdown.strategy", "heading");
+    cfg.addProperty("indexing.graph.chunking.markdown.windowSizeTokens", 100);
 
     OneMcp mcp = new TestMcp(cfg, null);
     Handbook hb = newHandbookWithDocs(docs, mcp);

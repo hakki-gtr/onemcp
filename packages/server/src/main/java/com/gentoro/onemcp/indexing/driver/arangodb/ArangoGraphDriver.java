@@ -6,6 +6,7 @@ import com.arangodb.ArangoDatabase;
 import com.arangodb.entity.CollectionType;
 import com.arangodb.model.AqlQueryOptions;
 import com.arangodb.model.CollectionCreateOptions;
+import com.arangodb.model.DocumentCreateOptions;
 import com.arangodb.model.DocumentDeleteOptions;
 import com.gentoro.onemcp.OneMcp;
 import com.gentoro.onemcp.indexing.GraphContextTuple;
@@ -26,6 +27,11 @@ public class ArangoGraphDriver implements GraphDriver {
 
   private static final String DEFAULT_DB_PREFIX = "onemcp_";
   private static final String COLLECTION_NODES = "nodes";
+  private static final String COLLECTION_ENTITIES = "entities";
+  private static final String COLLECTION_OPERATIONS = "operations";
+  private static final String COLLECTION_HAS_ENTITY = "hasEntity";
+  private static final String COLLECTION_HAS_OPERATION = "hasOperation";
+  private static final String GRAPH_NAME = "knowledgeGraph";
 
   private final OneMcp oneMcp;
   private final String handbookName;
@@ -39,17 +45,17 @@ public class ArangoGraphDriver implements GraphDriver {
     this.oneMcp = Objects.requireNonNull(oneMcp, "oneMcp");
     this.handbookName = handbookName != null ? handbookName : "default";
     String prefix =
-        oneMcp.configuration().getString("graph.arangodb.databasePrefix", DEFAULT_DB_PREFIX);
+        oneMcp.configuration().getString("indexing.graph.arangodb.databasePrefix", DEFAULT_DB_PREFIX);
     this.databaseName = prefix + sanitize(this.handbookName);
   }
 
   @Override
   public void initialize() {
     if (initialized.get()) return;
-    String host = oneMcp.configuration().getString("graph.arangodb.host", "localhost");
-    int port = oneMcp.configuration().getInteger("graph.arangodb.port", 8529);
-    String user = oneMcp.configuration().getString("graph.arangodb.user", "root");
-    String password = oneMcp.configuration().getString("graph.arangodb.password", "");
+    String host = oneMcp.configuration().getString("indexing.graph.arangodb.host", "localhost");
+    int port = oneMcp.configuration().getInteger("indexing.graph.arangodb.port", 8529);
+    String user = oneMcp.configuration().getString("indexing.graph.arangodb.user", "root");
+    String password = oneMcp.configuration().getString("indexing.graph.arangodb.password", "");
 
     arango = new ArangoDB.Builder().host(host, port).user(user).password(password).build();
     if (!arango.getDatabases().contains(databaseName)) {
@@ -57,6 +63,11 @@ public class ArangoGraphDriver implements GraphDriver {
     }
     db = arango.db(databaseName);
     createCollectionIfNeeded(COLLECTION_NODES, CollectionType.DOCUMENT);
+    createCollectionIfNeeded(COLLECTION_ENTITIES, CollectionType.DOCUMENT);
+    createCollectionIfNeeded(COLLECTION_OPERATIONS, CollectionType.DOCUMENT);
+    createCollectionIfNeeded(COLLECTION_HAS_ENTITY, CollectionType.EDGES);
+    createCollectionIfNeeded(COLLECTION_HAS_OPERATION, CollectionType.EDGES);
+    createGraphIfNeeded();
     initialized.set(true);
     log.info(
         "ArangoGraphDriver initialized database '{}' for handbook '{}'",
@@ -70,6 +81,59 @@ public class ArangoGraphDriver implements GraphDriver {
     }
   }
 
+  private void createGraphIfNeeded() {
+    try {
+      if (!db.graph(GRAPH_NAME).exists()) {
+        // Use REST API via HTTP request to create graph
+        // This is the simplest approach that works with the Java driver
+        String host = oneMcp.configuration().getString("indexing.graph.arangodb.host", "localhost");
+        int port = oneMcp.configuration().getInteger("indexing.graph.arangodb.port", 8529);
+        String user = oneMcp.configuration().getString("indexing.graph.arangodb.user", "root");
+        String password = oneMcp.configuration().getString("indexing.graph.arangodb.password", "");
+        
+        String url = String.format("http://%s:%d/_db/%s/_api/gharial", host, port, databaseName);
+        String jsonBody = String.format(
+            "{\"name\":\"%s\",\"edgeDefinitions\":["
+                + "{\"collection\":\"%s\",\"from\":[\"%s\"],\"to\":[\"%s\"]},"
+                + "{\"collection\":\"%s\",\"from\":[\"%s\"],\"to\":[\"%s\"]}"
+                + "]}",
+            GRAPH_NAME,
+            COLLECTION_HAS_ENTITY, COLLECTION_NODES, COLLECTION_ENTITIES,
+            COLLECTION_HAS_OPERATION, COLLECTION_NODES, COLLECTION_OPERATIONS);
+        
+        try {
+          java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
+          java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+              .uri(java.net.URI.create(url))
+              .header("Content-Type", "application/json")
+              .header("Authorization", "Basic " + java.util.Base64.getEncoder()
+                  .encodeToString((user + ":" + password).getBytes()))
+              .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonBody))
+              .build();
+          
+          java.net.http.HttpResponse<String> response = client.send(request, 
+              java.net.http.HttpResponse.BodyHandlers.ofString());
+          
+          if (response.statusCode() >= 200 && response.statusCode() < 300) {
+            log.info("Created ArangoDB graph '{}' with edge collections: {}, {}", 
+                GRAPH_NAME, COLLECTION_HAS_ENTITY, COLLECTION_HAS_OPERATION);
+          } else {
+            log.warn("Failed to create ArangoDB graph '{}': HTTP {} - {}", 
+                GRAPH_NAME, response.statusCode(), response.body());
+          }
+        } catch (Exception e) {
+          log.error("Failed to create ArangoDB graph '{}' via REST API: {}", 
+              GRAPH_NAME, e.getMessage(), e);
+        }
+      } else {
+        log.debug("ArangoDB graph '{}' already exists", GRAPH_NAME);
+      }
+    } catch (Exception e) {
+      log.error("Failed to check/create ArangoDB graph '{}': {}", GRAPH_NAME, e.getMessage(), e);
+    }
+  }
+
+
   @Override
   public boolean isInitialized() {
     return initialized.get();
@@ -78,6 +142,10 @@ public class ArangoGraphDriver implements GraphDriver {
   @Override
   public void clearAll() {
     db.collection(COLLECTION_NODES).truncate();
+    db.collection(COLLECTION_ENTITIES).truncate();
+    db.collection(COLLECTION_OPERATIONS).truncate();
+    db.collection(COLLECTION_HAS_ENTITY).truncate();
+    db.collection(COLLECTION_HAS_OPERATION).truncate();
   }
 
   @Override
@@ -86,7 +154,7 @@ public class ArangoGraphDriver implements GraphDriver {
     List<Map<String, Object>> docs = new ArrayList<>();
     for (GraphNodeRecord n : nodes) {
       Map<String, Object> doc = new LinkedHashMap<>(n.toMap());
-      doc.put("_key", n.getKey());
+      doc.put("_key", sanitizeDocumentKey(n.getKey()));
       docs.add(doc);
     }
     String aql =
@@ -99,6 +167,80 @@ public class ArangoGraphDriver implements GraphDriver {
       while (cursor.hasNext()) cursor.next();
     } catch (Exception e) {
       log.warn("Arango upsertNodes encountered an issue: {}", e.getMessage());
+    }
+
+    // Create edges to Entity and Operation vertices
+    for (GraphNodeRecord n : nodes) {
+      try {
+        String nodeKey = sanitizeDocumentKey(n.getKey());
+        String nodeId = COLLECTION_NODES + "/" + nodeKey;
+
+        // Delete existing edges for this node
+        String deleteEntityEdges =
+            "FOR e IN "
+                + COLLECTION_HAS_ENTITY
+                + " FILTER e._from == @nodeId REMOVE e IN "
+                + COLLECTION_HAS_ENTITY;
+        String deleteOpEdges =
+            "FOR e IN "
+                + COLLECTION_HAS_OPERATION
+                + " FILTER e._from == @nodeId REMOVE e IN "
+                + COLLECTION_HAS_OPERATION;
+        db.query(deleteEntityEdges, Map.class, Map.of("nodeId", nodeId), new AqlQueryOptions());
+        db.query(deleteOpEdges, Map.class, Map.of("nodeId", nodeId), new AqlQueryOptions());
+
+        // Create Entity vertices and edges
+        @SuppressWarnings("unchecked")
+        List<String> entities = n.getEntities();
+        if (entities != null) {
+          for (String entityName : entities) {
+            if (entityName == null || entityName.isBlank()) continue;
+            String entityKey = sanitizeDocumentKey(entityName);
+            String entityId = COLLECTION_ENTITIES + "/" + entityKey;
+
+            // Upsert entity vertex
+            Map<String, Object> entityDoc = Map.of("_key", entityKey, "name", entityName);
+            String upsertEntity =
+                "UPSERT { _key: @key } INSERT @doc REPLACE @doc IN " + COLLECTION_ENTITIES;
+            db.query(
+                upsertEntity,
+                Map.class,
+                Map.of("key", entityKey, "doc", entityDoc),
+                new AqlQueryOptions());
+
+            // Create edge
+            Map<String, Object> edge = Map.of("_from", nodeId, "_to", entityId);
+            db.collection(COLLECTION_HAS_ENTITY)
+                .insertDocument(edge, new DocumentCreateOptions());
+          }
+        }
+
+        // Create Operation vertices and edges
+        @SuppressWarnings("unchecked")
+        List<String> operations = n.getOperations();
+        if (operations != null) {
+          for (String opName : operations) {
+            if (opName == null || opName.isBlank()) continue;
+            String opKey = sanitizeDocumentKey(opName);
+            String opId = COLLECTION_OPERATIONS + "/" + opKey;
+
+            // Upsert operation vertex
+            Map<String, Object> opDoc = Map.of("_key", opKey, "name", opName);
+            String upsertOp =
+                "UPSERT { _key: @key } INSERT @doc REPLACE @doc IN " + COLLECTION_OPERATIONS;
+            db.query(
+                upsertOp, Map.class, Map.of("key", opKey, "doc", opDoc), new AqlQueryOptions());
+
+            // Create edge
+            Map<String, Object> edge = Map.of("_from", nodeId, "_to", opId);
+            db.collection(COLLECTION_HAS_OPERATION)
+                .insertDocument(edge, new DocumentCreateOptions());
+          }
+        }
+      } catch (Exception e) {
+        log.warn(
+            "Failed to create edges for node '{}': {}", n.getKey(), e.getMessage(), e);
+      }
     }
   }
 
@@ -134,15 +276,31 @@ public class ArangoGraphDriver implements GraphDriver {
       opsByEntity.computeIfAbsent(t.getEntity(), k -> new HashSet<>()).addAll(t.getOperations());
     }
 
-    Map<String, Object> bind = Map.of("entities", entities);
-    String aql = "FOR n IN nodes FILTER LENGTH(INTERSECTION(n.entities, @entities)) > 0 RETURN n";
+    // Use graph traversal to find nodes connected to requested entities
     List<Map> raw = Collections.emptyList();
     ArangoCursor<Map> cursor = null;
     try {
+      // Build entity keys for graph traversal
+      List<String> entityKeys =
+          entities.stream().map(ArangoGraphDriver::sanitizeDocumentKey).collect(Collectors.toList());
+      Map<String, Object> bind = Map.of("entityKeys", entityKeys);
+
+      // Graph traversal: find nodes connected to entities via HasEntity edges
+      String aql =
+          "FOR entity IN "
+              + COLLECTION_ENTITIES
+              + " FILTER entity._key IN @entityKeys "
+              + "FOR v, e, p IN 1..1 INBOUND entity "
+              + COLLECTION_HAS_ENTITY
+              + " "
+              + "FOR node IN "
+              + COLLECTION_NODES
+              + " FILTER node._id == v._id "
+              + "RETURN DISTINCT node";
       cursor = db.query(aql, Map.class, bind, new AqlQueryOptions());
       raw = cursor.asListRemaining();
     } catch (Exception e) {
-      log.warn("Arango queryByContext(filter) failed: {}", e.getMessage());
+      log.error("Arango queryByContext graph traversal failed: {}", e.getMessage(), e);
       raw = Collections.emptyList();
     } finally {
       if (cursor != null)
@@ -191,7 +349,8 @@ public class ArangoGraphDriver implements GraphDriver {
   public void deleteNodesByKeys(List<String> keys) {
     if (keys == null || keys.isEmpty()) return;
     for (String k : keys) {
-      db.collection(COLLECTION_NODES).deleteDocument(k, new DocumentDeleteOptions());
+      String sanitizedKey = sanitizeDocumentKey(k);
+      db.collection(COLLECTION_NODES).deleteDocument(sanitizedKey, new DocumentDeleteOptions());
     }
   }
 
@@ -219,5 +378,39 @@ public class ArangoGraphDriver implements GraphDriver {
     if (!s.matches("^[a-z].*")) s = "h_" + s;
     if (s.length() > 64) s = s.substring(0, 64);
     return s;
+  }
+
+  /**
+   * Sanitizes a document key to be ArangoDB-compliant.
+   *
+   * <p>ArangoDB document keys (_key) must:
+   * <ul>
+   *   <li>Only contain letters, numbers, dashes, and underscores</li>
+   *   <li>Not start with a number</li>
+   *   <li>Be 1-254 characters long</li>
+   * </ul>
+   *
+   * @param key the original key (may contain pipes, slashes, etc.)
+   * @return sanitized key valid for ArangoDB _key field
+   */
+  private static String sanitizeDocumentKey(String key) {
+    if (key == null || key.isEmpty()) {
+      throw new IllegalArgumentException("Document key cannot be null or empty");
+    }
+    // Replace pipe separators and other invalid characters with underscores
+    String sanitized = key.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+    // Ensure it doesn't start with a number
+    if (sanitized.matches("^[0-9].*")) {
+      sanitized = "k_" + sanitized;
+    }
+    // Ensure it doesn't start with underscore (though ArangoDB allows it, we avoid it for clarity)
+    if (sanitized.startsWith("_")) {
+      sanitized = "k" + sanitized;
+    }
+    // Truncate to 254 characters (ArangoDB limit)
+    if (sanitized.length() > 254) {
+      sanitized = sanitized.substring(0, 254);
+    }
+    return sanitized;
   }
 }
