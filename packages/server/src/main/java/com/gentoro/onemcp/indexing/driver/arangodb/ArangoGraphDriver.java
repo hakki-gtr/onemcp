@@ -31,6 +31,7 @@ public class ArangoGraphDriver implements GraphDriver {
   private static final String COLLECTION_OPERATIONS = "operations";
   private static final String COLLECTION_HAS_ENTITY = "hasEntity";
   private static final String COLLECTION_HAS_OPERATION = "hasOperation";
+  private static final String COLLECTION_HAS_CHUNK = "hasChunk";
   private static final String GRAPH_NAME = "knowledgeGraph";
 
   private final OneMcp oneMcp;
@@ -67,6 +68,7 @@ public class ArangoGraphDriver implements GraphDriver {
     createCollectionIfNeeded(COLLECTION_OPERATIONS, CollectionType.DOCUMENT);
     createCollectionIfNeeded(COLLECTION_HAS_ENTITY, CollectionType.EDGES);
     createCollectionIfNeeded(COLLECTION_HAS_OPERATION, CollectionType.EDGES);
+    createCollectionIfNeeded(COLLECTION_HAS_CHUNK, CollectionType.EDGES);
     createGraphIfNeeded();
     initialized.set(true);
     log.info(
@@ -95,11 +97,13 @@ public class ArangoGraphDriver implements GraphDriver {
         String jsonBody = String.format(
             "{\"name\":\"%s\",\"edgeDefinitions\":["
                 + "{\"collection\":\"%s\",\"from\":[\"%s\"],\"to\":[\"%s\"]},"
+                + "{\"collection\":\"%s\",\"from\":[\"%s\"],\"to\":[\"%s\"]},"
                 + "{\"collection\":\"%s\",\"from\":[\"%s\"],\"to\":[\"%s\"]}"
                 + "]}",
             GRAPH_NAME,
             COLLECTION_HAS_ENTITY, COLLECTION_NODES, COLLECTION_ENTITIES,
-            COLLECTION_HAS_OPERATION, COLLECTION_NODES, COLLECTION_OPERATIONS);
+            COLLECTION_HAS_OPERATION, COLLECTION_NODES, COLLECTION_OPERATIONS,
+            COLLECTION_HAS_CHUNK, COLLECTION_NODES, COLLECTION_NODES);
         
         try {
           java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
@@ -115,8 +119,8 @@ public class ArangoGraphDriver implements GraphDriver {
               java.net.http.HttpResponse.BodyHandlers.ofString());
           
           if (response.statusCode() >= 200 && response.statusCode() < 300) {
-            log.info("Created ArangoDB graph '{}' with edge collections: {}, {}", 
-                GRAPH_NAME, COLLECTION_HAS_ENTITY, COLLECTION_HAS_OPERATION);
+            log.info("Created ArangoDB graph '{}' with edge collections: {}, {}, {}", 
+                GRAPH_NAME, COLLECTION_HAS_ENTITY, COLLECTION_HAS_OPERATION, COLLECTION_HAS_CHUNK);
           } else {
             log.warn("Failed to create ArangoDB graph '{}': HTTP {} - {}", 
                 GRAPH_NAME, response.statusCode(), response.body());
@@ -146,6 +150,7 @@ public class ArangoGraphDriver implements GraphDriver {
     db.collection(COLLECTION_OPERATIONS).truncate();
     db.collection(COLLECTION_HAS_ENTITY).truncate();
     db.collection(COLLECTION_HAS_OPERATION).truncate();
+    db.collection(COLLECTION_HAS_CHUNK).truncate();
   }
 
   @Override
@@ -186,8 +191,14 @@ public class ArangoGraphDriver implements GraphDriver {
                 + COLLECTION_HAS_OPERATION
                 + " FILTER e._from == @nodeId REMOVE e IN "
                 + COLLECTION_HAS_OPERATION;
+        String deleteChunkEdges =
+            "FOR e IN "
+                + COLLECTION_HAS_CHUNK
+                + " FILTER e._from == @nodeId OR e._to == @nodeId REMOVE e IN "
+                + COLLECTION_HAS_CHUNK;
         db.query(deleteEntityEdges, Map.class, Map.of("nodeId", nodeId), new AqlQueryOptions());
         db.query(deleteOpEdges, Map.class, Map.of("nodeId", nodeId), new AqlQueryOptions());
+        db.query(deleteChunkEdges, Map.class, Map.of("nodeId", nodeId), new AqlQueryOptions());
 
         // Create Entity vertices and edges
         @SuppressWarnings("unchecked")
@@ -235,6 +246,32 @@ public class ArangoGraphDriver implements GraphDriver {
             Map<String, Object> edge = Map.of("_from", nodeId, "_to", opId);
             db.collection(COLLECTION_HAS_OPERATION)
                 .insertDocument(edge, new DocumentCreateOptions());
+          }
+        }
+
+        // Create HAS_CHUNK edges: if this node has a parentDocumentKey, create edge from document to chunk
+        String parentDocKey = n.getParentDocumentKey();
+        if (parentDocKey != null && !parentDocKey.isBlank()) {
+          try {
+            String parentDocKeySanitized = sanitizeDocumentKey(parentDocKey);
+            String parentDocId = COLLECTION_NODES + "/" + parentDocKeySanitized;
+            // Verify parent document exists
+            if (db.collection(COLLECTION_NODES).documentExists(parentDocKeySanitized)) {
+              Map<String, Object> chunkEdge = Map.of("_from", parentDocId, "_to", nodeId);
+              db.collection(COLLECTION_HAS_CHUNK)
+                  .insertDocument(chunkEdge, new DocumentCreateOptions());
+            } else {
+              log.warn(
+                  "Parent document '{}' not found for chunk '{}', skipping HAS_CHUNK edge",
+                  parentDocKey,
+                  n.getKey());
+            }
+          } catch (Exception e) {
+            log.warn(
+                "Failed to create HAS_CHUNK edge for chunk '{}' to parent '{}': {}",
+                n.getKey(),
+                parentDocKey,
+                e.getMessage());
           }
         }
       } catch (Exception e) {
@@ -342,6 +379,56 @@ public class ArangoGraphDriver implements GraphDriver {
       }
       if (ok) result.add(new LinkedHashMap<>(map));
     }
+
+    // If no direct matches, fallback: find document nodes that match entities, then include their chunks
+    if (result.isEmpty()) {
+      try {
+        // Build entity keys for document lookup
+        List<String> entityKeys =
+            entities.stream().map(ArangoGraphDriver::sanitizeDocumentKey).collect(Collectors.toList());
+        Map<String, Object> fallbackBind = Map.of("entityKeys", entityKeys);
+        
+        // Find document nodes matching entities
+        String findDocsAql =
+            "FOR doc IN "
+                + COLLECTION_NODES
+                + " FILTER doc.nodeType == 'DOCUMENT' "
+                + "LET docEntities = doc.entities "
+                + "FILTER LENGTH(INTERSECTION(docEntities, @entityKeys)) > 0 "
+                + "RETURN doc._key";
+        ArangoCursor<String> docCursor =
+            db.query(findDocsAql, String.class, fallbackBind, new AqlQueryOptions());
+        List<String> matchingDocKeys = docCursor.asListRemaining();
+
+        if (!matchingDocKeys.isEmpty()) {
+          // Find chunks linked to these documents via HAS_CHUNK edges
+          String findChunksAql =
+              "FOR docKey IN @docKeys "
+                  + "LET docId = CONCAT('"
+                  + COLLECTION_NODES
+                  + "/', docKey) "
+                  + "FOR v, e, p IN 1..1 OUTBOUND docId "
+                  + COLLECTION_HAS_CHUNK
+                  + " "
+                  + "FOR chunk IN "
+                  + COLLECTION_NODES
+                  + " FILTER chunk._id == v._id "
+                  + "RETURN DISTINCT chunk";
+          Map<String, Object> chunkBind = Map.of("docKeys", matchingDocKeys);
+          ArangoCursor<Map> chunkCursor =
+              db.query(findChunksAql, Map.class, chunkBind, new AqlQueryOptions());
+          List<Map> chunkResults = chunkCursor.asListRemaining();
+          for (Object o : chunkResults) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> chunkMap = (Map<String, Object>) o;
+            result.add(new LinkedHashMap<>(chunkMap));
+          }
+        }
+      } catch (Exception e) {
+        log.warn("Arango queryByContext fallback failed: {}", e.getMessage());
+      }
+    }
+
     return result;
   }
 

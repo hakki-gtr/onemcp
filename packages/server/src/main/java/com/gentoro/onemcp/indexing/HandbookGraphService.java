@@ -230,6 +230,13 @@ public class HandbookGraphService implements AutoCloseable {
           "Failed while attempting to generate documentation chunks for " + file, e);
     }
 
+    // --- 2) Create document node for this file
+    String documentKey = key("document", file.toString());
+    GraphNodeRecord documentNode =
+        new GraphNodeRecord(documentKey, KnowledgeNodeType.DOCUMENT)
+            .setDocPath(file.toString())
+            .setContentFormat("markdown");
+    // Extract entities from all chunks to assign to document (union of all chunk entities)
     EntityExtractor extractor =
         new EntityExtractor(
             oneMcp,
@@ -237,7 +244,17 @@ public class HandbookGraphService implements AutoCloseable {
                 .flatMap(api -> api.getEntities().stream())
                 .toList());
 
-    // Extract entities for each chunk
+    Set<String> documentEntities = new HashSet<>();
+    for (var c : chunks) {
+      var res = extractor.extract(c);
+      documentEntities.addAll(
+          res.getMatches().stream().map(EntityMatch::getEntity).toList());
+    }
+    documentNode.setEntities(new ArrayList<>(documentEntities));
+    batch.add(documentNode);
+    log.debug("Created document node '{}' with {} entities", documentKey, documentEntities.size());
+
+    // --- 3) Extract entities for each chunk and link to document
     for (var c : chunks) {
       var res = extractor.extract(c);
       log.info("Chunk: {} -> matches: {}", c.id(), res.getMatches().size());
@@ -249,6 +266,7 @@ public class HandbookGraphService implements AutoCloseable {
                   key("doc", file.toString(), Integer.toString(c.content().hashCode())),
                   KnowledgeNodeType.DOCS_CHUNK)
               .setDocPath(c.fileName())
+              .setParentDocumentKey(documentKey)
               .setEntities(res.getMatches().stream().map(EntityMatch::getEntity).toList())
               .setOperations(Collections.emptyList())
               .setContent(c.content())

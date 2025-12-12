@@ -18,6 +18,8 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class OrientGraphDriver implements GraphDriver {
+  private static final org.slf4j.Logger log =
+      com.gentoro.onemcp.logging.LoggingService.getLogger(OrientGraphDriver.class);
 
   private final OneMcp oneMcp;
   private final String handbookName;
@@ -154,6 +156,7 @@ public class OrientGraphDriver implements GraphDriver {
       // === Edges ===
       ensureEdgeClass(schema, "HasEntity");
       ensureEdgeClass(schema, "HasOperation");
+      ensureEdgeClass(schema, "HasChunk");
     }
   }
 
@@ -194,6 +197,7 @@ public class OrientGraphDriver implements GraphDriver {
 
         db.command("DELETE EDGE HasEntity WHERE out = ?", node.getIdentity());
         db.command("DELETE EDGE HasOperation WHERE out = ?", node.getIdentity());
+        db.command("DELETE EDGE HasChunk WHERE out = ? OR in = ?", node.getIdentity(), node.getIdentity());
 
         // Support both v2 canonical field "entities" (list) and legacy single "entity"
         Object ents = m.get("entities");
@@ -217,6 +221,32 @@ public class OrientGraphDriver implements GraphDriver {
         for (String opName : ops) {
           ODocument op = getOrCreateVertex(db, "Operation", "name", opName);
           createEdge(db, node, op, "HasOperation");
+        }
+
+        // Create HAS_CHUNK edges: if this node has a parentDocumentKey, create edge from document to chunk
+        String parentDocKey = rec.getParentDocumentKey();
+        if (parentDocKey != null && !parentDocKey.isBlank()) {
+          try {
+            OResult parentDocResult =
+                db.query("SELECT FROM KnowledgeNode WHERE key = ?", parentDocKey).stream()
+                    .findFirst()
+                    .orElse(null);
+            if (parentDocResult != null) {
+              ODocument parentDoc = (ODocument) parentDocResult.toElement();
+              createEdge(db, parentDoc, node, "HasChunk");
+            } else {
+              log.warn(
+                  "Parent document '{}' not found for chunk '{}', skipping HasChunk edge",
+                  parentDocKey,
+                  key);
+            }
+          } catch (Exception e) {
+            log.warn(
+                "Failed to create HasChunk edge for chunk '{}' to parent '{}': {}",
+                key,
+                parentDocKey,
+                e.getMessage());
+          }
         }
       }
     }
@@ -309,6 +339,40 @@ public class OrientGraphDriver implements GraphDriver {
         }
       }
 
+      // If no direct matches, fallback: find document nodes that match entities, then include their chunks
+      if (results.isEmpty()) {
+        for (String entity : allEntities) {
+          // Find document nodes matching this entity
+          String findDocsSql =
+              "SELECT FROM KnowledgeNode WHERE nodeType = 'DOCUMENT' AND entities CONTAINS ?";
+          List<ODocument> matchingDocs = new ArrayList<>();
+          for (OResult r : db.query(findDocsSql, entity).stream().toList()) {
+            OElement el = r.toElement();
+            if (el instanceof ODocument doc) {
+              matchingDocs.add(doc);
+            }
+          }
+
+          // For each matching document, find its chunks via HasChunk edges
+          for (ODocument doc : matchingDocs) {
+            String findChunksSql =
+                "SELECT expand(out('HasChunk')) FROM ?";
+            for (OResult r : db.query(findChunksSql, doc.getIdentity()).stream().toList()) {
+              OElement el = r.toElement();
+              if (el instanceof ODocument chunkDoc) {
+                // Avoid duplicates
+                String chunkKey = chunkDoc.field("key");
+                if (chunkKey != null
+                    && results.stream()
+                        .noneMatch(m -> chunkKey.equals(m.get("key")))) {
+                  results.add(chunkDoc.toMap());
+                }
+              }
+            }
+          }
+        }
+      }
+
       return results;
     }
   }
@@ -323,6 +387,9 @@ public class OrientGraphDriver implements GraphDriver {
   @Override
   public void clearAll() {
     try (ODatabaseSession db = this.orientDbPool.acquire()) {
+      db.command("DELETE EDGE HasChunk");
+      db.command("DELETE EDGE HasEntity");
+      db.command("DELETE EDGE HasOperation");
       db.command("DELETE VERTEX KnowledgeNode");
       db.command("DELETE VERTEX Entity");
       db.command("DELETE VERTEX Operation");
