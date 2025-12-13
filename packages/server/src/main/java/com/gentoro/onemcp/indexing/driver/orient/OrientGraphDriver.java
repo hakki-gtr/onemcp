@@ -150,6 +150,7 @@ public class OrientGraphDriver implements GraphDriver {
       ensureProperty(kn, "docPath", OType.STRING);
       ensureProperty(kn, "title", OType.STRING);
       ensureProperty(kn, "summary", OType.STRING);
+      ensureProperty(kn, "parentDocumentKey", OType.STRING);
 
       ensureUniqueIndex(kn, "KnowledgeNode.key.unique", "key");
 
@@ -192,6 +193,7 @@ public class OrientGraphDriver implements GraphDriver {
         node.field("docPath", m.get("docPath"));
         node.field("title", m.get("title"));
         node.field("summary", m.get("summary"));
+        node.field("parentDocumentKey", m.get("parentDocumentKey"));
 
         node.save();
 

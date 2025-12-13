@@ -12,6 +12,7 @@ import com.gentoro.onemcp.indexing.docs.Tokenizer;
 import com.gentoro.onemcp.indexing.driver.memory.InMemoryGraphDriver;
 import com.gentoro.onemcp.indexing.model.KnowledgeNodeType;
 import com.gentoro.onemcp.indexing.openapi.OpenApiToNodes;
+import com.gentoro.onemcp.indexing.GraphValidationService.ValidationReport;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -138,6 +139,92 @@ public class HandbookGraphService implements AutoCloseable {
     // Persist
     driver.upsertNodes(batch);
     log.info("Indexed {} nodes into graph backend '{}'", batch.size(), driver.getDriverName());
+
+    // Run validation if enabled
+    boolean runValidation =
+        oneMcp.configuration().getBoolean("indexing.graph.validation.runAfterIndexing", false);
+    if (runValidation) {
+      log.info("Running graph validation after indexing...");
+      try {
+        GraphValidationService validator = new GraphValidationService(oneMcp, this);
+        ValidationReport report = validator.validate(true);
+        
+        // Save report to file if configured
+        String reportPath = saveValidationReport(report, oneMcp);
+        if (reportPath != null) {
+          log.info("Validation report saved to: {}", reportPath);
+        }
+        
+        // Always log the full report
+        if (report.hasErrors()) {
+          log.error("Graph validation report:\n{}", report);
+        } else if (!report.getWarnings().isEmpty()) {
+          log.warn("Graph validation report:\n{}", report);
+        } else {
+          log.info("Graph validation report:\n{}", report);
+        }
+      } catch (Exception e) {
+        log.warn("Graph validation failed after indexing: {}", e.getMessage(), e);
+      }
+    } else {
+      log.debug(
+          "Graph validation not running automatically. "
+              + "Set GRAPH_VALIDATION_RUN_AFTER_INDEXING=true to enable automatic validation after indexing.");
+    }
+  }
+
+  /**
+   * Manually trigger graph validation and return the report.
+   *
+   * @return validation report with errors, warnings, and recommendations
+   */
+  public GraphValidationService.ValidationReport validateGraph() {
+    GraphValidationService validator = new GraphValidationService(oneMcp, this);
+    ValidationReport report = validator.validate();
+    
+    // Save report to file if configured
+    String reportPath = saveValidationReport(report, oneMcp);
+    if (reportPath != null) {
+      log.info("Validation report saved to: {}", reportPath);
+    }
+    
+    return report;
+  }
+
+  /**
+   * Save validation report to a file if output path is configured.
+   *
+   * @param report the validation report to save
+   * @param oneMcp the OneMcp instance for configuration access
+   * @return the path where the report was saved, or null if not saved
+   */
+  private String saveValidationReport(ValidationReport report, OneMcp oneMcp) {
+    try {
+      String outputPath = oneMcp.configuration().getString("indexing.graph.validation.reportPath", null);
+      if (outputPath == null || outputPath.isBlank()) {
+        // Default to logs directory if not configured
+        String logsDir = oneMcp.configuration().getString("logging.dir", "logs");
+        outputPath = logsDir + "/graph-validation-report-" + System.currentTimeMillis() + ".txt";
+      }
+      
+      // Ensure directory exists
+      java.io.File file = new java.io.File(outputPath);
+      java.io.File parentDir = file.getParentFile();
+      if (parentDir != null && !parentDir.exists()) {
+        parentDir.mkdirs();
+      }
+      
+      // Write report to file
+      try (java.io.FileWriter writer = new java.io.FileWriter(file)) {
+        writer.write(report.toString());
+        writer.flush();
+      }
+      
+      return file.getAbsolutePath();
+    } catch (Exception e) {
+      log.warn("Failed to save validation report to file: {}", e.getMessage());
+      return null;
+    }
   }
 
   /**

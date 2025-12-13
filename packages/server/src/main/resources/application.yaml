@@ -81,6 +81,24 @@ indexing:
         windowSizeTokens: ${env:GRAPH_MD_WINDOW_SIZE:-500}
         overlapTokens: ${env:GRAPH_MD_OVERLAP:-64}
 
+    # Graph validation configuration
+    validation:
+      # Run validation automatically after indexing completes
+      runAfterIndexing: ${env:GRAPH_VALIDATION_RUN_AFTER_INDEXING:-false}
+      # Path to save validation report file (default: logs/graph-validation-report-{timestamp}.txt)
+      # Set to empty string to disable file output
+      reportPath: ${env:GRAPH_VALIDATION_REPORT_PATH:-}
+      # Structural validation (deterministic, fast, always enabled if validation enabled)
+      structural:
+        enabled: ${env:GRAPH_VALIDATION_STRUCTURAL_ENABLED:-true}
+      # Semantic validation using LLM (cost-aware, sampled)
+      semantic:
+        enabled: ${env:GRAPH_VALIDATION_SEMANTIC_ENABLED:-true}
+        # Maximum number of documents to validate (sampling for cost control)
+        maxSamples: ${env:GRAPH_VALIDATION_MAX_SAMPLES:-10}
+        # Only run semantic validation if structural validation passes
+        requireStructuralPass: ${env:GRAPH_VALIDATION_SEMANTIC_REQUIRE_STRUCTURAL:-true}
+
     # ArangoDB driver configuration
     arangodb:
       # Hostname/IP of ArangoDB server
